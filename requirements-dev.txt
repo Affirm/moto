@@ -1,4 +1,4 @@
 -r requirements.txt
 flask
-boto
+boto>=2.27.0
 httpretty

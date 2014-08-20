@@ -128,7 +128,7 @@ class ResponseObject(object):
 
     def _bucket_response_put(self, request, bucket_name, querystring, headers):
         if 'versioning' in querystring:
-            ver = re.search('<Status>([A-Za-z]+)</Status>', request.body)
+            ver = re.search('<Status>([A-Za-z]+)</Status>', request.data)
             if ver:
                 self.backend.set_bucket_versioning(bucket_name, ver.group(1))
                 template = Template(S3_BUCKET_VERSIONING)

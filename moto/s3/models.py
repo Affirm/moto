@@ -1,13 +1,17 @@
+from __future__ import unicode_literals
 import os
 import base64
 import datetime
 import hashlib
 import copy
 import itertools
+import codecs
+import six
 
+from bisect import insort
 from moto.core import BaseBackend
-from moto.core.utils import iso_8601_datetime, rfc_1123_datetime
-from .exceptions import BucketAlreadyExists, MissingBucket
+from moto.core.utils import iso_8601_datetime_with_milliseconds, rfc_1123_datetime
+from .exceptions import BucketAlreadyExists, MissingBucket, InvalidPart, EntityTooSmall
 from .utils import clean_key_name, _VersionedKeyStore
 
 UPLOAD_ID_BYTES = 43
@@ -19,7 +23,7 @@ class FakeKey(object):
     def __init__(self, name, value, storage="STANDARD", etag=None, is_versioned=False, version_id=0):
         self.name = name
         self.value = value
-        self.last_modified = datetime.datetime.now()
+        self.last_modified = datetime.datetime.utcnow()
         self._storage_class = storage
         self._metadata = {}
         self._expiry = None
@@ -33,18 +37,17 @@ class FakeKey(object):
             r.name = new_name
         return r
 
-    def set_metadata(self, key, metadata):
-        self._metadata[key] = metadata
-
-    def clear_metadata(self):
-        self._metadata = {}
+    def set_metadata(self, metadata, replace=False):
+        if replace:
+            self._metadata = {}
+        self._metadata.update(metadata)
 
     def set_storage_class(self, storage_class):
         self._storage_class = storage_class
 
     def append_to_value(self, value):
         self.value += value
-        self.last_modified = datetime.datetime.now()
+        self.last_modified = datetime.datetime.utcnow()
         self._etag = None  # must recalculate etag
         if self._is_versioned:
             self._version_id += 1
@@ -52,19 +55,23 @@ class FakeKey(object):
             self._is_versioned = 0
 
     def restore(self, days):
-        self._expiry = datetime.datetime.now() + datetime.timedelta(days)
+        self._expiry = datetime.datetime.utcnow() + datetime.timedelta(days)
 
     @property
     def etag(self):
         if self._etag is None:
             value_md5 = hashlib.md5()
-            value_md5.update(bytes(self.value))
+            if isinstance(self.value, six.text_type):
+                value = self.value.encode("utf-8")
+            else:
+                value = self.value
+            value_md5.update(value)
             self._etag = value_md5.hexdigest()
         return '"{0}"'.format(self._etag)
 
     @property
     def last_modified_ISO8601(self):
-        return iso_8601_datetime(self.last_modified)
+        return iso_8601_datetime_with_milliseconds(self.last_modified)
 
     @property
     def last_modified_RFC1123(self):
@@ -108,25 +115,36 @@ class FakeKey(object):
 
 
 class FakeMultipart(object):
-    def __init__(self, key_name):
+    def __init__(self, key_name, metadata):
         self.key_name = key_name
+        self.metadata = metadata
         self.parts = {}
-        self.id = base64.b64encode(os.urandom(UPLOAD_ID_BYTES)).replace('=', '').replace('+', '')
+        self.partlist = []  # ordered list of part ID's
+        rand_b64 = base64.b64encode(os.urandom(UPLOAD_ID_BYTES))
+        self.id = rand_b64.decode('utf-8').replace('=', '').replace('+', '')
 
-    def complete(self):
+    def complete(self, body):
+        decode_hex = codecs.getdecoder("hex_codec")
         total = bytearray()
         md5s = bytearray()
-        last_part_name = len(self.list_parts())
 
-        for part in self.list_parts():
-            if part.name != last_part_name and len(part.value) < UPLOAD_PART_MIN_SIZE:
-                return None, None
-            md5s.extend(part.etag.replace('"', '').decode('hex'))
+        last = None
+        count = 0
+        for pn, etag in body:
+            part = self.parts.get(pn)
+            if part is None or part.etag != etag:
+                raise InvalidPart()
+            if last is not None and len(last.value) < UPLOAD_PART_MIN_SIZE:
+                raise EntityTooSmall()
+            part_etag = part.etag.replace('"', '')
+            md5s.extend(decode_hex(part_etag)[0])
             total.extend(part.value)
+            last = part
+            count += 1
 
         etag = hashlib.md5()
         etag.update(bytes(md5s))
-        return total, "{0}-{1}".format(etag.hexdigest(), last_part_name)
+        return total, "{0}-{1}".format(etag.hexdigest(), count)
 
     def set_part(self, part_id, value):
         if part_id < 1:
@@ -134,31 +152,74 @@ class FakeMultipart(object):
 
         key = FakeKey(part_id, value)
         self.parts[part_id] = key
+        if part_id not in self.partlist:
+            insort(self.partlist, part_id)
         return key
 
     def list_parts(self):
-        parts = []
+        for part_id in self.partlist:
+            yield self.parts[part_id]
 
-        for part_id, index in enumerate(sorted(self.parts.keys()), start=1):
-            # Make sure part ids are continuous
-            if part_id != index:
-                return
-            parts.append(self.parts[part_id])
 
-        return parts
+class LifecycleRule(object):
+    def __init__(self, id=None, prefix=None, status=None, expiration_days=None,
+                 expiration_date=None, transition_days=None,
+                 transition_date=None, storage_class=None):
+        self.id = id
+        self.prefix = prefix
+        self.status = status
+        self.expiration_days = expiration_days
+        self.expiration_date = expiration_date
+        self.transition_days = transition_days
+        self.transition_date = transition_date
+        self.storage_class = storage_class
 
 
 class FakeBucket(object):
 
-    def __init__(self, name):
+    def __init__(self, name, region_name):
         self.name = name
+        self.region_name = region_name
         self.keys = _VersionedKeyStore()
         self.multiparts = {}
         self.versioning_status = None
+        self.rules = []
+        self.policy = None
+
+    @property
+    def location(self):
+        return self.region_name
 
     @property
     def is_versioned(self):
         return self.versioning_status == 'Enabled'
+
+    def set_lifecycle(self, rules):
+        self.rules = []
+        for rule in rules:
+            expiration = rule.get('Expiration')
+            transition = rule.get('Transition')
+            self.rules.append(LifecycleRule(
+                id=rule.get('ID'),
+                prefix=rule['Prefix'],
+                status=rule['Status'],
+                expiration_days=expiration.get('Days') if expiration else None,
+                expiration_date=expiration.get('Date') if expiration else None,
+                transition_days=transition.get('Days') if transition else None,
+                transition_date=transition.get('Date') if transition else None,
+                storage_class=transition['StorageClass'] if transition else None,
+            ))
+
+    def delete_lifecycle(self):
+        self.rules = []
+
+    def get_cfn_attribute(self, attribute_name):
+        from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
+        if attribute_name == 'DomainName':
+            raise NotImplementedError('"Fn::GetAtt" : [ "{0}" , "DomainName" ]"')
+        elif attribute_name == 'WebsiteURL':
+            raise NotImplementedError('"Fn::GetAtt" : [ "{0}" , "WebsiteURL" ]"')
+        raise UnformattedGetAttTemplateException()
 
 
 class S3Backend(BaseBackend):
@@ -166,10 +227,10 @@ class S3Backend(BaseBackend):
     def __init__(self):
         self.buckets = {}
 
-    def create_bucket(self, bucket_name):
+    def create_bucket(self, bucket_name, region_name):
         if bucket_name in self.buckets:
-            raise BucketAlreadyExists()
-        new_bucket = FakeBucket(name=bucket_name)
+            raise BucketAlreadyExists(bucket=bucket_name)
+        new_bucket = FakeBucket(name=bucket_name, region_name=region_name)
         self.buckets[bucket_name] = new_bucket
         return new_bucket
 
@@ -180,7 +241,7 @@ class S3Backend(BaseBackend):
         try:
             return self.buckets[bucket_name]
         except KeyError:
-            raise MissingBucket()
+            raise MissingBucket(bucket=bucket_name)
 
     def delete_bucket(self, bucket_name):
         bucket = self.get_bucket(bucket_name)
@@ -208,6 +269,16 @@ class S3Backend(BaseBackend):
                 "Called get_bucket_versions with some of delimiter, encoding_type, key_marker, version_id_marker")
 
         return itertools.chain(*(l for _, l in bucket.keys.iterlists()))
+
+    def get_bucket_policy(self, bucket_name):
+        return self.get_bucket(bucket_name).policy
+
+    def set_bucket_policy(self, bucket_name, policy):
+        self.get_bucket(bucket_name).policy = policy
+
+    def set_bucket_lifecycle(self, bucket_name, rules):
+        bucket = self.get_bucket(bucket_name)
+        bucket.set_lifecycle(rules)
 
     def set_key(self, bucket_name, key_name, value, storage=None, etag=None):
         key_name = clean_key_name(key_name)
@@ -249,22 +320,24 @@ class S3Backend(BaseBackend):
                     if str(key._version_id) == str(version_id):
                         return key
 
-    def initiate_multipart(self, bucket_name, key_name):
+    def initiate_multipart(self, bucket_name, key_name, metadata):
         bucket = self.get_bucket(bucket_name)
-        new_multipart = FakeMultipart(key_name)
+        new_multipart = FakeMultipart(key_name, metadata)
         bucket.multiparts[new_multipart.id] = new_multipart
 
         return new_multipart
 
-    def complete_multipart(self, bucket_name, multipart_id):
+    def complete_multipart(self, bucket_name, multipart_id, body):
         bucket = self.get_bucket(bucket_name)
         multipart = bucket.multiparts[multipart_id]
-        value, etag = multipart.complete()
+        value, etag = multipart.complete(body)
         if value is None:
             return
         del bucket.multiparts[multipart_id]
 
-        return self.set_key(bucket_name, multipart.key_name, value, etag=etag)
+        key = self.set_key(bucket_name, multipart.key_name, value, etag=etag)
+        key.set_metadata(multipart.metadata)
+        return key
 
     def cancel_multipart(self, bucket_name, multipart_id):
         bucket = self.get_bucket(bucket_name)
@@ -272,7 +345,7 @@ class S3Backend(BaseBackend):
 
     def list_multipart(self, bucket_name, multipart_id):
         bucket = self.get_bucket(bucket_name)
-        return bucket.multiparts[multipart_id].list_parts()
+        return list(bucket.multiparts[multipart_id].list_parts())
 
     def get_all_multiparts(self, bucket_name):
         bucket = self.get_bucket(bucket_name)
@@ -295,7 +368,7 @@ class S3Backend(BaseBackend):
         key_results = set()
         folder_results = set()
         if prefix:
-            for key_name, key in bucket.keys.iteritems():
+            for key_name, key in bucket.keys.items():
                 if key_name.startswith(prefix):
                     key_without_prefix = key_name.replace(prefix, "", 1)
                     if delimiter and delimiter in key_without_prefix:
@@ -305,10 +378,10 @@ class S3Backend(BaseBackend):
                     else:
                         key_results.add(key)
         else:
-            for key_name, key in bucket.keys.iteritems():
+            for key_name, key in bucket.keys.items():
                 if delimiter and delimiter in key_name:
                     # If delimiter, we need to split out folder_results
-                    folder_results.add(key_name.split(delimiter)[0])
+                    folder_results.add(key_name.split(delimiter)[0] + delimiter)
                 else:
                     key_results.add(key)
 

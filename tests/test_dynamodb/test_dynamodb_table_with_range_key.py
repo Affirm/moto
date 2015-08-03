@@ -1,3 +1,5 @@
+from __future__ import unicode_literals
+
 import boto
 import sure  # noqa
 from freezegun import freeze_time
@@ -243,14 +245,14 @@ def test_delete_item_with_attribute_response():
 
     response = item.delete(return_values='ALL_OLD')
     response.should.equal({
-        u'Attributes': {
-            u'Body': u'http://url_to_lolcat.gif',
-            u'forum_name': u'LOLCat Forum',
-            u'ReceivedTime': u'12/9/2011 11:36:03 PM',
-            u'SentBy': u'User A',
-            u'subject': u'Check this out!'
+        'Attributes': {
+            'Body': 'http://url_to_lolcat.gif',
+            'forum_name': 'LOLCat Forum',
+            'ReceivedTime': '12/9/2011 11:36:03 PM',
+            'SentBy': 'User A',
+            'subject': 'Check this out!'
         },
-        u'ConsumedCapacityUnits': 0.5
+        'ConsumedCapacityUnits': 0.5
     })
     table.refresh()
     table.item_count.should.equal(0)

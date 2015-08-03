@@ -1,3 +1,5 @@
+from __future__ import unicode_literals
+
 from .amazon_dev_pay import AmazonDevPay
 from .amis import AmisResponse
 from .availability_zones_and_regions import AvailabilityZonesAndRegions
@@ -24,6 +26,7 @@ from .virtual_private_gateways import VirtualPrivateGateways
 from .vm_export import VMExport
 from .vm_import import VMImport
 from .vpcs import VPCs
+from .vpc_peering_connections import VPCPeeringConnections
 from .vpn_connections import VPNConnections
 from .windows import Windows
 
@@ -55,7 +58,11 @@ class EC2Response(
     VMExport,
     VMImport,
     VPCs,
+    VPCPeeringConnections,
     VPNConnections,
     Windows,
 ):
-    pass
+    @property
+    def ec2_backend(self):
+        from moto.ec2.models import ec2_backends
+        return ec2_backends[self.region]

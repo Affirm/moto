@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import sure  # noqa
 
 import moto.server as server
@@ -13,5 +14,5 @@ def test_describe_autoscaling_groups():
 
     res = test_client.get('/?Action=DescribeLaunchConfigurations')
 
-    res.data.should.contain('<DescribeLaunchConfigurationsResponse')
-    res.data.should.contain('<LaunchConfigurations>')
+    res.data.should.contain(b'<DescribeLaunchConfigurationsResponse')
+    res.data.should.contain(b'<LaunchConfigurations>')

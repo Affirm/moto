@@ -1,37 +1,32 @@
-from jinja2 import Template
-
+from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
-from moto.ec2.models import ec2_backend
+from moto.ec2.utils import filters_from_querystring
 
 
 def process_rules_from_querystring(querystring):
-
-    name = None
-    group_id = None
-
     try:
-        name = querystring.get('GroupName')[0]
+        group_name_or_id = querystring.get('GroupName')[0]
     except:
-        group_id = querystring.get('GroupId')[0]
+        group_name_or_id = querystring.get('GroupId')[0]
 
     ip_protocol = querystring.get('IpPermissions.1.IpProtocol')[0]
     from_port = querystring.get('IpPermissions.1.FromPort')[0]
     to_port = querystring.get('IpPermissions.1.ToPort')[0]
     ip_ranges = []
-    for key, value in querystring.iteritems():
+    for key, value in querystring.items():
         if 'IpPermissions.1.IpRanges' in key:
             ip_ranges.append(value[0])
 
     source_groups = []
     source_group_ids = []
 
-    for key, value in querystring.iteritems():
+    for key, value in querystring.items():
         if 'IpPermissions.1.Groups.1.GroupId' in key:
             source_group_ids.append(value[0])
         elif 'IpPermissions.1.Groups' in key:
             source_groups.append(value[0])
 
-    return (name, group_id, ip_protocol, from_port, to_port, ip_ranges, source_groups, source_group_ids)
+    return (group_name_or_id, ip_protocol, from_port, to_port, ip_ranges, source_groups, source_group_ids)
 
 
 class SecurityGroups(BaseResponse):
@@ -39,22 +34,15 @@ class SecurityGroups(BaseResponse):
         raise NotImplementedError('SecurityGroups.authorize_security_group_egress is not yet implemented')
 
     def authorize_security_group_ingress(self):
-        ec2_backend.authorize_security_group_ingress(*process_rules_from_querystring(self.querystring))
+        self.ec2_backend.authorize_security_group_ingress(*process_rules_from_querystring(self.querystring))
         return AUTHORIZE_SECURITY_GROUP_INGRESS_REPONSE
 
     def create_security_group(self):
         name = self.querystring.get('GroupName')[0]
-        try:
-            description = self.querystring.get('GroupDescription')[0]
-        except TypeError:
-            # No description found, return error
-            return "The request must contain the parameter GroupDescription", dict(status=400)
+        description = self.querystring.get('GroupDescription', [None])[0]
         vpc_id = self.querystring.get("VpcId", [None])[0]
-        group = ec2_backend.create_security_group(name, description, vpc_id=vpc_id)
-        if not group:
-            # There was an exisitng group
-            return "There was an existing security group with name {0}".format(name), dict(status=409)
-        template = Template(CREATE_SECURITY_GROUP_RESPONSE)
+        group = self.ec2_backend.create_security_group(name, description, vpc_id=vpc_id)
+        template = self.response_template(CREATE_SECURITY_GROUP_RESPONSE)
         return template.render(group=group)
 
     def delete_security_group(self):
@@ -64,28 +52,31 @@ class SecurityGroups(BaseResponse):
         sg_id = self.querystring.get('GroupId')
 
         if name:
-            group = ec2_backend.delete_security_group(name[0])
+            self.ec2_backend.delete_security_group(name[0])
         elif sg_id:
-            group = ec2_backend.delete_security_group(group_id=sg_id[0])
+            self.ec2_backend.delete_security_group(group_id=sg_id[0])
 
-        # needs name or group now
-        if not group:
-            # There was no such group
-            return "There was no security group with name {0}".format(name), dict(status=404)
         return DELETE_GROUP_RESPONSE
 
     def describe_security_groups(self):
-        groups = ec2_backend.describe_security_groups()
-        template = Template(DESCRIBE_SECURITY_GROUPS_RESPONSE)
+        groupnames = self._get_multi_param("GroupName")
+        group_ids = self._get_multi_param("GroupId")
+        filters = filters_from_querystring(self.querystring)
+
+        groups = self.ec2_backend.describe_security_groups(
+            group_ids=group_ids,
+            groupnames=groupnames,
+            filters=filters
+        )
+
+        template = self.response_template(DESCRIBE_SECURITY_GROUPS_RESPONSE)
         return template.render(groups=groups)
 
     def revoke_security_group_egress(self):
         raise NotImplementedError('SecurityGroups.revoke_security_group_egress is not yet implemented')
 
     def revoke_security_group_ingress(self):
-        success = ec2_backend.revoke_security_group_ingress(*process_rules_from_querystring(self.querystring))
-        if not success:
-            return "Could not find a matching ingress rule", dict(status=404)
+        self.ec2_backend.revoke_security_group_ingress(*process_rules_from_querystring(self.querystring))
         return REVOKE_SECURITY_GROUP_INGRESS_REPONSE
 
 
@@ -138,6 +129,16 @@ DESCRIBE_SECURITY_GROUPS_RESPONSE = """<DescribeSecurityGroupsResponse xmlns="ht
                 {% endfor %}
              </ipPermissions>
              <ipPermissionsEgress/>
+             <tagSet>
+               {% for tag in group.get_tags() %}
+                 <item>
+                   <resourceId>{{ tag.resource_id }}</resourceId>
+                   <resourceType>{{ tag.resource_type }}</resourceType>
+                   <key>{{ tag.key }}</key>
+                   <value>{{ tag.value }}</value>
+                 </item>
+               {% endfor %}
+             </tagSet>
           </item>
       {% endfor %}
    </securityGroupInfo>

@@ -1,12 +1,15 @@
+from __future__ import unicode_literals
 import boto
+import boto3
 from boto.exception import SQSError
-from boto.sqs.message import RawMessage
+from boto.sqs.message import RawMessage, Message
 
 import requests
 import sure  # noqa
 import time
 
 from moto import mock_sqs
+from tests.helpers import requires_boto_gte
 
 
 @mock_sqs
@@ -18,6 +21,18 @@ def test_create_queue():
     all_queues[0].name.should.equal("test-queue")
 
     all_queues[0].get_timeout().should.equal(60)
+
+
+@mock_sqs
+def test_create_queues_in_multiple_region():
+    west1_conn = boto.sqs.connect_to_region("us-west-1")
+    west1_conn.create_queue("test-queue")
+
+    west2_conn = boto.sqs.connect_to_region("us-west-2")
+    west2_conn.create_queue("test-queue")
+
+    list(west1_conn.get_all_queues()).should.have.length_of(1)
+    list(west2_conn.get_all_queues()).should.have.length_of(1)
 
 
 @mock_sqs
@@ -89,6 +104,47 @@ def test_send_message():
 
     messages[0].get_body().should.equal(body_one)
     messages[1].get_body().should.equal(body_two)
+
+
+@mock_sqs
+def test_send_message_with_xml_characters():
+    conn = boto.connect_sqs('the_key', 'the_secret')
+    queue = conn.create_queue("test-queue", visibility_timeout=60)
+    queue.set_message_class(RawMessage)
+
+    body_one = '< & >'
+
+    queue.write(queue.new_message(body_one))
+
+    messages = conn.receive_message(queue, number_messages=1)
+
+    messages[0].get_body().should.equal(body_one)
+
+
+@requires_boto_gte("2.28")
+@mock_sqs
+def test_send_message_with_attributes():
+    conn = boto.connect_sqs('the_key', 'the_secret')
+    queue = conn.create_queue("test-queue", visibility_timeout=60)
+    queue.set_message_class(RawMessage)
+
+    body = 'this is a test message'
+    message = queue.new_message(body)
+    message_attributes = {
+        'test.attribute_name': {'data_type': 'String', 'string_value': 'attribute value'},
+        'test.binary_attribute': {'data_type': 'Binary', 'binary_value': 'binary value'},
+        'test.number_attribute': {'data_type': 'Number', 'string_value': 'string value'}
+    }
+    message.message_attributes = message_attributes
+
+    queue.write(message)
+
+    messages = conn.receive_message(queue)
+
+    messages[0].get_body().should.equal(body)
+
+    for name, value in message_attributes.items():
+        dict(messages[0].message_attributes[name]).should.equal(value)
 
 
 @mock_sqs
@@ -256,6 +312,23 @@ def test_send_batch_operation():
     messages = queue.get_messages(2)
 
 
+@requires_boto_gte("2.28")
+@mock_sqs
+def test_send_batch_operation_with_message_attributes():
+    conn = boto.connect_sqs('the_key', 'the_secret')
+    queue = conn.create_queue("test-queue", visibility_timeout=60)
+    queue.set_message_class(RawMessage)
+
+    message_tuple = ("my_first_message", 'test message 1', 0, {'name1': {'data_type': 'String', 'string_value': 'foo'}})
+    queue.write_batch([message_tuple])
+
+    messages = queue.get_messages()
+    messages[0].get_body().should.equal("test message 1")
+
+    for name, value in message_tuple[3].items():
+        dict(messages[0].message_attributes[name]).should.equal(value)
+
+
 @mock_sqs
 def test_delete_batch_operation():
     conn = boto.connect_sqs('the_key', 'the_secret')
@@ -356,3 +429,51 @@ def test_change_message_visibility_on_visible_message():
     queue.count().should.equal(1)
 
     original_message.change_visibility.when.called_with(100).should.throw(SQSError)
+
+
+@mock_sqs
+def test_purge_action():
+    conn = boto.sqs.connect_to_region("us-east-1")
+
+    queue = conn.create_queue('new-queue')
+    queue.write(queue.new_message('this is another test message'))
+    queue.count().should.equal(1)
+
+    queue.purge()
+
+    queue.count().should.equal(0)
+
+
+@mock_sqs
+def test_delete_message_after_visibility_timeout():
+    VISIBILITY_TIMEOUT = 1
+    conn = boto.sqs.connect_to_region("us-east-1")
+    new_queue = conn.create_queue('new-queue', visibility_timeout=VISIBILITY_TIMEOUT)
+
+    m1 = Message()
+    m1.set_body('Message 1!')
+    new_queue.write(m1)
+
+    assert new_queue.count() == 1
+
+    m1_retrieved = new_queue.read()
+
+    time.sleep(VISIBILITY_TIMEOUT + 1)
+
+    m1_retrieved.delete()
+
+    assert new_queue.count() == 0
+
+"""
+boto3
+"""
+
+
+@mock_sqs
+def test_boto3_message_send():
+    sqs = boto3.resource('sqs', region_name='us-east-1')
+    queue = sqs.create_queue(QueueName="blah")
+    queue.send_message(MessageBody="derp")
+
+    messages = queue.receive_messages()
+    messages.should.have.length_of(1)

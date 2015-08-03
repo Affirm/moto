@@ -1,3 +1,5 @@
+from __future__ import unicode_literals
+
 import boto
 import sure  # noqa
 from freezegun import freeze_time
@@ -46,7 +48,7 @@ def test_create_table():
             },
             'TableName': 'messages',
             'TableSizeBytes': 0,
-            'TableStatus': 'ACTIVE'
+            'TableStatus': 'ACTIVE',
         }
     }
     conn.describe_table('messages').should.equal(expected)

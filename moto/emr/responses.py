@@ -1,46 +1,22 @@
-from jinja2 import Template
+from __future__ import unicode_literals
 
 from moto.core.responses import BaseResponse
-from moto.core.utils import camelcase_to_underscores
-from .models import emr_backend
+from .models import emr_backends
+from .utils import tags_from_query_string
 
 
 class ElasticMapReduceResponse(BaseResponse):
 
-    def _get_param(self, param_name):
-        return self.querystring.get(param_name, [None])[0]
-
-    def _get_multi_param(self, param_prefix):
-        return [value[0] for key, value in self.querystring.items() if key.startswith(param_prefix)]
-
-    def _get_dict_param(self, param_prefix):
-        params = {}
-        for key, value in self.querystring.items():
-            if key.startswith(param_prefix):
-                params[camelcase_to_underscores(key.replace(param_prefix, ""))] = value[0]
-        return params
-
-    def _get_list_prefix(self, param_prefix):
-        results = []
-        param_index = 1
-        while True:
-            index_prefix = "{0}.{1}.".format(param_prefix, param_index)
-            new_items = {}
-            for key, value in self.querystring.items():
-                if key.startswith(index_prefix):
-                    new_items[camelcase_to_underscores(key.replace(index_prefix, ""))] = value[0]
-            if not new_items:
-                break
-            results.append(new_items)
-            param_index += 1
-        return results
+    @property
+    def backend(self):
+        return emr_backends[self.region]
 
     def add_job_flow_steps(self):
         job_flow_id = self._get_param('JobFlowId')
         steps = self._get_list_prefix('Steps.member')
 
-        job_flow = emr_backend.add_job_flow_steps(job_flow_id, steps)
-        template = Template(ADD_JOB_FLOW_STEPS_TEMPLATE)
+        job_flow = self.backend.add_job_flow_steps(job_flow_id, steps)
+        template = self.response_template(ADD_JOB_FLOW_STEPS_TEMPLATE)
         return template.render(job_flow=job_flow)
 
     def run_job_flow(self):
@@ -51,42 +27,79 @@ class ElasticMapReduceResponse(BaseResponse):
         job_flow_role = self._get_param('JobFlowRole')
         visible_to_all_users = self._get_param('VisibleToAllUsers')
 
-        job_flow = emr_backend.run_job_flow(
+        job_flow = self.backend.run_job_flow(
             flow_name, log_uri, job_flow_role,
             visible_to_all_users, steps, instance_attrs
         )
-        template = Template(RUN_JOB_FLOW_TEMPLATE)
+        instance_groups = self._get_list_prefix('Instances.InstanceGroups.member')
+        if instance_groups:
+            self.backend.add_instance_groups(job_flow.id, instance_groups)
+
+        template = self.response_template(RUN_JOB_FLOW_TEMPLATE)
         return template.render(job_flow=job_flow)
 
     def describe_job_flows(self):
-        job_flows = emr_backend.describe_job_flows()
-        template = Template(DESCRIBE_JOB_FLOWS_TEMPLATE)
+        job_flow_ids = self._get_multi_param("JobFlowIds.member")
+        job_flows = self.backend.describe_job_flows(job_flow_ids)
+        template = self.response_template(DESCRIBE_JOB_FLOWS_TEMPLATE)
         return template.render(job_flows=job_flows)
 
     def terminate_job_flows(self):
         job_ids = self._get_multi_param('JobFlowIds.member.')
-        job_flows = emr_backend.terminate_job_flows(job_ids)
-        template = Template(TERMINATE_JOB_FLOWS_TEMPLATE)
+        job_flows = self.backend.terminate_job_flows(job_ids)
+        template = self.response_template(TERMINATE_JOB_FLOWS_TEMPLATE)
         return template.render(job_flows=job_flows)
 
     def add_instance_groups(self):
         jobflow_id = self._get_param('JobFlowId')
         instance_groups = self._get_list_prefix('InstanceGroups.member')
-        instance_groups = emr_backend.add_instance_groups(jobflow_id, instance_groups)
-        template = Template(ADD_INSTANCE_GROUPS_TEMPLATE)
+        instance_groups = self.backend.add_instance_groups(jobflow_id, instance_groups)
+        template = self.response_template(ADD_INSTANCE_GROUPS_TEMPLATE)
         return template.render(instance_groups=instance_groups)
 
     def modify_instance_groups(self):
         instance_groups = self._get_list_prefix('InstanceGroups.member')
-        instance_groups = emr_backend.modify_instance_groups(instance_groups)
-        template = Template(MODIFY_INSTANCE_GROUPS_TEMPLATE)
+        instance_groups = self.backend.modify_instance_groups(instance_groups)
+        template = self.response_template(MODIFY_INSTANCE_GROUPS_TEMPLATE)
         return template.render(instance_groups=instance_groups)
 
     def set_visible_to_all_users(self):
         visible_to_all_users = self._get_param('VisibleToAllUsers')
         job_ids = self._get_multi_param('JobFlowIds.member')
-        emr_backend.set_visible_to_all_users(job_ids, visible_to_all_users)
-        template = Template(SET_VISIBLE_TO_ALL_USERS_TEMPLATE)
+        self.backend.set_visible_to_all_users(job_ids, visible_to_all_users)
+        template = self.response_template(SET_VISIBLE_TO_ALL_USERS_TEMPLATE)
+        return template.render()
+
+    def set_termination_protection(self):
+        termination_protection = self._get_param('TerminationProtected')
+        job_ids = self._get_multi_param('JobFlowIds.member')
+        self.backend.set_termination_protection(job_ids, termination_protection)
+        template = self.response_template(SET_TERMINATION_PROTECTION_TEMPLATE)
+        return template.render()
+
+    def list_clusters(self):
+        clusters = self.backend.list_clusters()
+        template = self.response_template(LIST_CLUSTERS_TEMPLATE)
+        return template.render(clusters=clusters)
+
+    def describe_cluster(self):
+        cluster_id = self._get_param('ClusterId')
+        cluster = self.backend.get_cluster(cluster_id)
+        template = self.response_template(DESCRIBE_CLUSTER_TEMPLATE)
+        return template.render(cluster=cluster)
+
+    def add_tags(self):
+        cluster_id = self._get_param('ResourceId')
+        tags = tags_from_query_string(self.querystring)
+        self.backend.add_tags(cluster_id, tags)
+        template = self.response_template(ADD_TAGS_TEMPLATE)
+        return template.render()
+
+    def remove_tags(self):
+        cluster_id = self._get_param('ResourceId')
+        tag_keys = self._get_multi_param('TagKeys.member')
+        self.backend.remove_tags(cluster_id, tag_keys)
+        template = self.response_template(REMOVE_TAGS_TEMPLATE)
         return template.render()
 
 
@@ -151,6 +164,7 @@ DESCRIBE_JOB_FLOWS_TEMPLATE = """<DescribeJobFlowsResponse xmlns="http://elastic
                <InstanceCount>{{ job_flow.instance_count }}</InstanceCount>
                <KeepJobFlowAliveWhenNoSteps>{{ job_flow.keep_job_flow_alive_when_no_steps }}</KeepJobFlowAliveWhenNoSteps>
                <TerminationProtected>{{ job_flow.termination_protected }}</TerminationProtected>
+               <MasterPublicDnsName>ec2-184-0-0-1.us-west-1.compute.amazonaws.com</MasterPublicDnsName>
                <InstanceGroups>
                   {% for instance_group in job_flow.instance_groups %}
                   <member>
@@ -192,6 +206,85 @@ ADD_JOB_FLOW_STEPS_TEMPLATE = """<AddJobFlowStepsResponse xmlns="http://elasticm
    </ResponseMetadata>
 </AddJobFlowStepsResponse>"""
 
+LIST_CLUSTERS_TEMPLATE = """<ListClustersResponse xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
+    <Clusters>
+    {% for cluster in clusters %}
+        <member>
+            <Id>{{ cluster.id }}</Id>
+            <Name>{{ cluster.name }}</Name>
+            <NormalizedInstanceHours>{{ cluster.normalized_instance_hours }}</NormalizedInstanceHours>
+            <Status>
+                <State>{{ cluster.state }}</State>
+                <StateChangeReason>
+                    <Code></Code>
+                    <Message></Message>
+                </StateChangeReason>
+                <Timeline></Timeline>
+            </Status>
+        </member>
+    {% endfor %}
+    </Clusters>
+    <Marker></Marker>
+    <ResponseMetadata>
+        <RequestId>
+            2690d7eb-ed86-11dd-9877-6fad448a8418
+        </RequestId>
+    </ResponseMetadata>
+</ListClustersResponse>"""
+
+DESCRIBE_CLUSTER_TEMPLATE = """<DescribeClusterResponse xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
+  <DescribeClusterResult>
+    <Cluster>
+      <Id>{{ cluster.id }}</Id>
+      <Tags>
+      {% for tag_key, tag_value in cluster.tags.items() %}
+          <member>
+              <Key>{{ tag_key }}</Key>
+              <Value>{{ tag_value }}</Value>
+          </member>
+      {% endfor %}
+      </Tags>
+      <Ec2InstanceAttributes>
+        <Ec2AvailabilityZone>{{ cluster.availability_zone }}</Ec2AvailabilityZone>
+        <Ec2SubnetId>{{ cluster.subnet_id }}</Ec2SubnetId>
+        <Ec2KeyName>{{ cluster.ec2_key_name }}</Ec2KeyName>
+      </Ec2InstanceAttributes>
+      <RunningAmiVersion>{{ cluster.running_ami_version }}</RunningAmiVersion>
+      <VisibleToAllUsers>{{ cluster.visible_to_all_users }}</VisibleToAllUsers>
+      <Status>
+        <StateChangeReason>
+          <Message>Terminated by user request</Message>
+          <Code>USER_REQUEST</Code>
+        </StateChangeReason>
+        <State>{{ cluster.state }}</State>
+        <Timeline>
+          <CreationDateTime>2014-01-24T01:21:21Z</CreationDateTime>
+          <ReadyDateTime>2014-01-24T01:25:26Z</ReadyDateTime>
+          <EndDateTime>2014-01-24T02:19:46Z</EndDateTime>
+        </Timeline>
+      </Status>
+      <AutoTerminate>{{ cluster.auto_terminate }}</AutoTerminate>
+      <Name>{{ cluster.name }}</Name>
+      <RequestedAmiVersion>{{ cluster.requested_ami_version }}</RequestedAmiVersion>
+      <Applications>
+        {% for application in cluster.applications %}
+        <member>
+          <Name>{{ application.name }}</Name>
+          <Version>{{ application.version }}</Version>
+        </member>
+        {% endfor %}
+      </Applications>
+      <TerminationProtected>{{ cluster.termination_protection }}</TerminationProtected>
+      <MasterPublicDnsName>ec2-184-0-0-1.us-west-1.compute.amazonaws.com</MasterPublicDnsName>
+      <NormalizedInstanceHours>{{ cluster.normalized_instance_hours }}</NormalizedInstanceHours>
+      <ServiceRole>{{ cluster.service_role }}</ServiceRole>
+    </Cluster>
+  </DescribeClusterResult>
+  <ResponseMetadata>
+    <RequestId>aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee</RequestId>
+  </ResponseMetadata>
+</DescribeClusterResponse>"""
+
 ADD_INSTANCE_GROUPS_TEMPLATE = """<AddInstanceGroupsResponse xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
    <InstanceGroupIds>{% for instance_group in instance_groups %}{{ instance_group.id }}{% if loop.index != loop.length %},{% endif %}{% endfor %}</InstanceGroupIds>
 </AddInstanceGroupsResponse>"""
@@ -211,3 +304,28 @@ SET_VISIBLE_TO_ALL_USERS_TEMPLATE = """<SetVisibleToAllUsersResponse xmlns="http
       </RequestId>
    </ResponseMetadata>
 </SetVisibleToAllUsersResponse>"""
+
+
+SET_TERMINATION_PROTECTION_TEMPLATE = """<SetTerminationProtection xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
+   <ResponseMetadata>
+      <RequestId>
+         2690d7eb-ed86-11dd-9877-6fad448a8419
+      </RequestId>
+   </ResponseMetadata>
+</SetTerminationProtection>"""
+
+ADD_TAGS_TEMPLATE = """<AddTagsResponse xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
+   <ResponseMetadata>
+      <RequestId>
+         2690d7eb-ed86-11dd-9877-6fad448a8419
+      </RequestId>
+   </ResponseMetadata>
+</AddTagsResponse>"""
+
+REMOVE_TAGS_TEMPLATE = """<RemoveTagsResponse xmlns="http://elasticmapreduce.amazonaws.com/doc/2009-03-31">
+   <ResponseMetadata>
+      <RequestId>
+         2690d7eb-ed86-11dd-9877-6fad448a8419
+      </RequestId>
+   </ResponseMetadata>
+</RemoveTagsResponse>"""

@@ -1,7 +1,11 @@
-import base64
+from __future__ import unicode_literals
+
 import hashlib
 import time
 import re
+from xml.sax.saxutils import escape
+
+import boto.sqs
 
 from moto.core import BaseBackend
 from moto.core.utils import camelcase_to_underscores, get_random_message_id
@@ -17,7 +21,8 @@ DEFAULT_ACCOUNT_ID = 123456789012
 class Message(object):
     def __init__(self, message_id, body):
         self.id = message_id
-        self.body = body
+        self._body = body
+        self.message_attributes = {}
         self.receipt_handle = None
         self.sender_id = DEFAULT_ACCOUNT_ID
         self.sent_timestamp = None
@@ -29,8 +34,12 @@ class Message(object):
     @property
     def md5(self):
         body_md5 = hashlib.md5()
-        body_md5.update(self.body)
+        body_md5.update(self.body.encode('utf-8'))
         return body_md5.hexdigest()
+
+    @property
+    def body(self):
+        return escape(self._body)
 
     def mark_sent(self, delay_seconds=None):
         self.sent_timestamp = unix_time_millis()
@@ -112,13 +121,32 @@ class Queue(object):
         self.receive_message_wait_time_seconds = 0
 
     @classmethod
-    def create_from_cloudformation_json(cls, resource_name, cloudformation_json):
+    def create_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
         properties = cloudformation_json['Properties']
 
+        sqs_backend = sqs_backends[region_name]
         return sqs_backend.create_queue(
             name=properties['QueueName'],
             visibility_timeout=properties.get('VisibilityTimeout'),
         )
+
+    @classmethod
+    def update_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
+        properties = cloudformation_json['Properties']
+        queue_name = properties['QueueName']
+
+        sqs_backend = sqs_backends[region_name]
+        queue = sqs_backend.get_queue(queue_name)
+        if 'VisibilityTimeout' in properties:
+            queue.visibility_timeout = int(properties['VisibilityTimeout'])
+        return queue
+
+    @classmethod
+    def delete_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
+        properties = cloudformation_json['Properties']
+        queue_name = properties['QueueName']
+        sqs_backend = sqs_backends[region_name]
+        sqs_backend.delete_queue(queue_name)
 
     @property
     def approximate_number_of_messages_delayed(self):
@@ -150,6 +178,14 @@ class Queue(object):
     def add_message(self, message):
         self._messages.append(message)
 
+    def get_cfn_attribute(self, attribute_name):
+        from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
+        if attribute_name == 'Arn':
+            return self.queue_arn
+        elif attribute_name == 'QueueName':
+            return self.name
+        raise UnformattedGetAttTemplateException()
+
 
 class SQSBackend(BaseBackend):
     def __init__(self):
@@ -157,8 +193,10 @@ class SQSBackend(BaseBackend):
         super(SQSBackend, self).__init__()
 
     def create_queue(self, name, visibility_timeout):
-        queue = Queue(name, visibility_timeout)
-        self.queues[name] = queue
+        queue = self.queues.get(name)
+        if queue is None:
+            queue = Queue(name, visibility_timeout)
+            self.queues[name] = queue
         return queue
 
     def list_queues(self, queue_name_prefix):
@@ -185,7 +223,8 @@ class SQSBackend(BaseBackend):
         setattr(queue, key, value)
         return queue
 
-    def send_message(self, queue_name, message_body, delay_seconds=None):
+    def send_message(self, queue_name, message_body, message_attributes=None, delay_seconds=None):
+
         queue = self.get_queue(queue_name)
 
         if delay_seconds:
@@ -196,11 +235,15 @@ class SQSBackend(BaseBackend):
         message_id = get_random_message_id()
         message = Message(message_id, message_body)
 
+        if message_attributes:
+            message.message_attributes = message_attributes
+
         message.mark_sent(
             delay_seconds=delay_seconds
         )
 
         queue.add_message(message)
+
         return message
 
     def receive_messages(self, queue_name, count):
@@ -225,6 +268,7 @@ class SQSBackend(BaseBackend):
             result.append(message)
             if len(result) >= count:
                 break
+
         return result
 
     def delete_message(self, queue_name, receipt_handle):
@@ -233,7 +277,7 @@ class SQSBackend(BaseBackend):
         for message in queue._messages:
             # Only delete message if it is not visible and the reciept_handle
             # matches.
-            if not message.visible and message.receipt_handle == receipt_handle:
+            if message.receipt_handle == receipt_handle:
                 continue
             new_messages.append(message)
         queue._messages = new_messages
@@ -248,4 +292,11 @@ class SQSBackend(BaseBackend):
                 return
         raise ReceiptHandleIsInvalid
 
-sqs_backend = SQSBackend()
+    def purge_queue(self, queue_name):
+        queue = self.get_queue(queue_name)
+        queue._messages = []
+
+
+sqs_backends = {}
+for region in boto.sqs.regions():
+    sqs_backends[region.name] = SQSBackend()

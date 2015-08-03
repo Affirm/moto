@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import sure  # noqa
 
 import moto.server as server
@@ -13,4 +14,4 @@ def test_elb_describe_instances():
 
     res = test_client.get('/?Action=DescribeLoadBalancers')
 
-    res.data.should.contain('DescribeLoadBalancersResponse')
+    res.data.should.contain(b'DescribeLoadBalancersResponse')

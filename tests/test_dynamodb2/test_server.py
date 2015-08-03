@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import sure  # noqa
 
 import moto.server as server
@@ -15,4 +16,4 @@ def test_table_list():
 
     headers = {'X-Amz-Target': 'TestTable.ListTables'}
     res = test_client.get('/', headers=headers)
-    res.data.should.contain('TableNames')
+    res.data.should.contain(b'TableNames')

@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import re
 import sys
 import argparse
@@ -30,7 +31,7 @@ class DomainDispatcherApplication(object):
         if self.service:
             return self.service
 
-        for backend_name, backend in BACKENDS.iteritems():
+        for backend_name, backend in BACKENDS.items():
             for url_base in backend.url_bases:
                 if re.match(url_base, 'http://%s' % host):
                     return backend_name
@@ -72,8 +73,23 @@ def create_backend_app(service):
     backend_app.url_map.converters['regex'] = RegexConverter
 
     backend = BACKENDS[service]
-    for url_path, handler in backend.flask_paths.iteritems():
-        backend_app.route(url_path, methods=HTTP_METHODS)(convert_flask_to_httpretty_response(handler))
+    for url_path, handler in backend.flask_paths.items():
+        if handler.__name__ == 'dispatch':
+            endpoint = '{0}.dispatch'.format(handler.__self__.__name__)
+        else:
+            endpoint = None
+
+        if endpoint in backend_app.view_functions:
+            # HACK: Sometimes we map the same view to multiple url_paths. Flask
+            # requries us to have different names.
+            endpoint += "2"
+
+        backend_app.add_url_rule(
+            url_path,
+            endpoint=endpoint,
+            methods=HTTP_METHODS,
+            view_func=convert_flask_to_httpretty_response(handler),
+        )
 
     return backend_app
 

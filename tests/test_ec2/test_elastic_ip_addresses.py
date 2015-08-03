@@ -1,13 +1,17 @@
-"""Test mocking of Elatic IP Address"""
+from __future__ import unicode_literals
+# Ensure 'assert_raises' context manager support for Python 2.6
+import tests.backport_assert_raises
+from nose.tools import assert_raises
+
 import boto
 from boto.exception import EC2ResponseError
+import six
 
 import sure  # noqa
 
 from moto import mock_ec2
 
 import logging
-import types
 
 
 @mock_ec2
@@ -17,7 +21,7 @@ def test_eip_allocate_classic():
 
     standard = conn.allocate_address()
     standard.should.be.a(boto.ec2.address.Address)
-    standard.public_ip.should.be.a(types.UnicodeType)
+    standard.public_ip.should.be.a(six.text_type)
     standard.instance_id.should.be.none
     standard.domain.should.be.equal("standard")
     standard.release()
@@ -41,7 +45,11 @@ def test_eip_allocate_invalid_domain():
     """Allocate EIP invalid domain"""
     conn = boto.connect_ec2('the_key', 'the_secret')
 
-    conn.allocate_address.when.called_with(domain="bogus").should.throw(EC2ResponseError)
+    with assert_raises(EC2ResponseError) as cm:
+        conn.allocate_address(domain="bogus")
+    cm.exception.code.should.equal('InvalidParameterValue')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
 
 @mock_ec2
@@ -54,7 +62,13 @@ def test_eip_associate_classic():
 
     eip = conn.allocate_address()
     eip.instance_id.should.be.none
-    conn.associate_address.when.called_with(public_ip=eip.public_ip).should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(public_ip=eip.public_ip)
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
+
     conn.associate_address(instance_id=instance.id, public_ip=eip.public_ip)
     eip = conn.get_all_addresses(addresses=[eip.public_ip])[0]  # no .update() on address ):
     eip.instance_id.should.be.equal(instance.id)
@@ -77,7 +91,13 @@ def test_eip_associate_vpc():
 
     eip = conn.allocate_address(domain='vpc')
     eip.instance_id.should.be.none
-    conn.associate_address.when.called_with(allocation_id=eip.allocation_id).should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(allocation_id=eip.allocation_id)
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
+
     conn.associate_address(instance_id=instance.id, allocation_id=eip.allocation_id)
     eip = conn.get_all_addresses(addresses=[eip.public_ip])[0]  # no .update() on address ):
     eip.instance_id.should.be.equal(instance.id)
@@ -91,21 +111,88 @@ def test_eip_associate_vpc():
     instance.terminate()
 
 @mock_ec2
+def test_eip_associate_network_interface():
+    """Associate/Disassociate EIP to NIC"""
+    conn = boto.connect_vpc('the_key', 'the_secret')
+    vpc = conn.create_vpc("10.0.0.0/16")
+    subnet = conn.create_subnet(vpc.id, "10.0.0.0/18")
+    eni = conn.create_network_interface(subnet.id)
+
+    eip = conn.allocate_address(domain='vpc')
+    eip.network_interface_id.should.be.none
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(network_interface_id=eni.id)
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
+
+    conn.associate_address(network_interface_id=eni.id, allocation_id=eip.allocation_id)
+    eip = conn.get_all_addresses(addresses=[eip.public_ip])[0]  # no .update() on address ):
+    eip.network_interface_id.should.be.equal(eni.id)
+    conn.disassociate_address(association_id=eip.association_id)
+    eip = conn.get_all_addresses(addresses=[eip.public_ip])[0]  # no .update() on address ):
+    eip.network_interface_id.should.be.equal(u'')
+    eip.association_id.should.be.none
+    eip.release()
+    eip = None
+
+@mock_ec2
 def test_eip_reassociate():
     """reassociate EIP"""
     conn = boto.connect_ec2('the_key', 'the_secret')
 
-    reservation = conn.run_instances('ami-1234abcd')
-    instance = reservation.instances[0]
+    reservation = conn.run_instances('ami-1234abcd', min_count=2)
+    instance1, instance2 = reservation.instances
 
     eip = conn.allocate_address()
-    conn.associate_address(instance_id=instance.id, public_ip=eip.public_ip)
-    conn.associate_address.when.called_with(instance_id=instance.id, public_ip=eip.public_ip, allow_reassociation=False).should.throw(EC2ResponseError)
-    conn.associate_address.when.called_with(instance_id=instance.id, public_ip=eip.public_ip, allow_reassociation=True).should_not.throw(EC2ResponseError)
+    conn.associate_address(instance_id=instance1.id, public_ip=eip.public_ip)
+
+    # Same ID is idempotent
+    conn.associate_address(instance_id=instance1.id, public_ip=eip.public_ip)
+
+    # Different ID detects resource association
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(instance_id=instance2.id, public_ip=eip.public_ip, allow_reassociation=False)
+    cm.exception.code.should.equal('Resource.AlreadyAssociated')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
+
+    conn.associate_address.when.called_with(instance_id=instance2.id, public_ip=eip.public_ip, allow_reassociation=True).should_not.throw(EC2ResponseError)
+
     eip.release()
     eip = None
 
-    instance.terminate()
+    instance1.terminate()
+    instance2.terminate()
+
+@mock_ec2
+def test_eip_reassociate_nic():
+    """reassociate EIP"""
+    conn = boto.connect_vpc('the_key', 'the_secret')
+
+    vpc = conn.create_vpc("10.0.0.0/16")
+    subnet = conn.create_subnet(vpc.id, "10.0.0.0/18")
+    eni1 = conn.create_network_interface(subnet.id)
+    eni2 = conn.create_network_interface(subnet.id)
+
+    eip = conn.allocate_address()
+    conn.associate_address(network_interface_id=eni1.id, public_ip=eip.public_ip)
+
+    # Same ID is idempotent
+    conn.associate_address(network_interface_id=eni1.id, public_ip=eip.public_ip)
+
+    # Different ID detects resource association
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(network_interface_id=eni2.id, public_ip=eip.public_ip)
+    cm.exception.code.should.equal('Resource.AlreadyAssociated')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
+
+    conn.associate_address.when.called_with(network_interface_id=eni2.id, public_ip=eip.public_ip, allow_reassociation=True).should_not.throw(EC2ResponseError)
+
+    eip.release()
+    eip = None
 
 @mock_ec2
 def test_eip_associate_invalid_args():
@@ -116,7 +203,12 @@ def test_eip_associate_invalid_args():
     instance = reservation.instances[0]
 
     eip = conn.allocate_address()
-    conn.associate_address.when.called_with(instance_id=instance.id).should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.associate_address(instance_id=instance.id)
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
     instance.terminate()
 
@@ -125,27 +217,47 @@ def test_eip_associate_invalid_args():
 def test_eip_disassociate_bogus_association():
     """Disassociate bogus EIP"""
     conn = boto.connect_ec2('the_key', 'the_secret')
-    conn.disassociate_address.when.called_with(association_id="bogus").should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.disassociate_address(association_id="bogus")
+    cm.exception.code.should.equal('InvalidAssociationID.NotFound')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
 @mock_ec2
 def test_eip_release_bogus_eip():
     """Release bogus EIP"""
     conn = boto.connect_ec2('the_key', 'the_secret')
-    conn.release_address.when.called_with(allocation_id="bogus").should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.release_address(allocation_id="bogus")
+    cm.exception.code.should.equal('InvalidAllocationID.NotFound')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
 
 @mock_ec2
 def test_eip_disassociate_arg_error():
     """Invalid arguments disassociate address"""
     conn = boto.connect_ec2('the_key', 'the_secret')
-    conn.disassociate_address.when.called_with().should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.disassociate_address()
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
 
 @mock_ec2
 def test_eip_release_arg_error():
     """Invalid arguments release address"""
     conn = boto.connect_ec2('the_key', 'the_secret')
-    conn.release_address.when.called_with().should.throw(EC2ResponseError)
+
+    with assert_raises(EC2ResponseError) as cm:
+        conn.release_address()
+    cm.exception.code.should.equal('MissingParameter')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 
 
 @mock_ec2
@@ -186,9 +298,12 @@ def test_eip_describe():
 
 @mock_ec2
 def test_eip_describe_none():
-    """Find nothing when seach for bogus IP"""
+    """Error when search for bogus IP"""
     conn = boto.connect_ec2('the_key', 'the_secret')
-    lookup_addresses = conn.get_all_addresses(addresses=["256.256.256.256"])
-    len(lookup_addresses).should.be.equal(0)
 
+    with assert_raises(EC2ResponseError) as cm:
+        conn.get_all_addresses(addresses=["256.256.256.256"])
+    cm.exception.code.should.equal('InvalidAddress.NotFound')
+    cm.exception.status.should.equal(400)
+    cm.exception.request_id.should_not.be.none
 

@@ -1,13 +1,16 @@
-import re
-import sys
-import urllib2
-import urlparse
+from __future__ import unicode_literals
 
-bucket_name_regex = re.compile("(.+).s3.amazonaws.com")
+from boto.s3.key import Key
+import re
+import six
+from six.moves.urllib.parse import urlparse, unquote
+import sys
+
+bucket_name_regex = re.compile("(.+).s3(.*).amazonaws.com")
 
 
 def bucket_name_from_url(url):
-    domain = urlparse.urlparse(url).netloc
+    domain = urlparse(url).netloc
 
     if domain.startswith('www.'):
         domain = domain[4:]
@@ -24,8 +27,26 @@ def bucket_name_from_url(url):
             return None
 
 
+def metadata_from_headers(headers):
+    metadata = {}
+    meta_regex = re.compile('^x-amz-meta-([a-zA-Z0-9\-_]+)$', flags=re.IGNORECASE)
+    for header, value in headers.items():
+        if isinstance(header, six.string_types):
+            result = meta_regex.match(header)
+            meta_key = None
+            if result:
+                # Check for extra metadata
+                meta_key = result.group(0).lower()
+            elif header.lower() in Key.base_user_settable_fields:
+                # Check for special metadata that doesn't start with x-amz-meta
+                meta_key = header
+            if meta_key:
+                metadata[meta_key] = headers[header]
+    return metadata
+
+
 def clean_key_name(key_name):
-    return urllib2.unquote(key_name)
+    return unquote(key_name)
 
 
 class _VersionedKeyStore(dict):

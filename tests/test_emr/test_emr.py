@@ -1,10 +1,47 @@
+from __future__ import unicode_literals
+
 import boto
 from boto.emr.instance_group import InstanceGroup
+
 from boto.emr.step import StreamingStep
 import sure  # noqa
 
 from moto import mock_emr
 from tests.helpers import requires_boto_gte
+
+
+@mock_emr
+def test_create_job_flow_in_multiple_regions():
+    step = StreamingStep(
+        name='My wordcount example',
+        mapper='s3n://elasticmapreduce/samples/wordcount/wordSplitter.py',
+        reducer='aggregate',
+        input='s3n://elasticmapreduce/samples/wordcount/input',
+        output='s3n://output_bucket/output/wordcount_output'
+    )
+
+    west1_conn = boto.emr.connect_to_region('us-east-1')
+    west1_job_id = west1_conn.run_jobflow(
+        name='us-east-1',
+        log_uri='s3://some_bucket/jobflow_logs',
+        master_instance_type='m1.medium',
+        slave_instance_type='m1.small',
+        steps=[step],
+    )
+
+    west2_conn = boto.emr.connect_to_region('eu-west-1')
+    west2_job_id = west2_conn.run_jobflow(
+        name='eu-west-1',
+        log_uri='s3://some_bucket/jobflow_logs',
+        master_instance_type='m1.medium',
+        slave_instance_type='m1.small',
+        steps=[step],
+    )
+
+    west1_job_flow = west1_conn.describe_jobflow(west1_job_id)
+    west1_job_flow.name.should.equal('us-east-1')
+    west2_job_flow = west2_conn.describe_jobflow(west2_job_id)
+    west2_job_flow.name.should.equal('eu-west-1')
 
 
 @mock_emr
@@ -91,6 +128,7 @@ def test_create_job_flow_with_new_params():
     )
 
 
+@requires_boto_gte("2.8")
 @mock_emr
 def test_create_job_flow_visible_to_all_users():
     conn = boto.connect_emr()
@@ -98,12 +136,31 @@ def test_create_job_flow_visible_to_all_users():
     job_id = conn.run_jobflow(
         name='My jobflow',
         log_uri='s3://some_bucket/jobflow_logs',
-        job_flow_role='some-role-arn',
         steps=[],
         visible_to_all_users=True,
     )
     job_flow = conn.describe_jobflow(job_id)
     job_flow.visibletoallusers.should.equal('True')
+
+
+@requires_boto_gte("2.8")
+@mock_emr
+def test_create_job_flow_with_instance_groups():
+    conn = boto.connect_emr()
+
+    instance_groups = [InstanceGroup(6, 'TASK', 'c1.medium', 'SPOT', 'spot-0.07', '0.07'),
+                       InstanceGroup(6, 'TASK', 'c1.medium', 'SPOT', 'spot-0.07', '0.07')]
+    job_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[],
+        instance_groups=instance_groups
+    )
+
+    job_flow = conn.describe_jobflow(job_id)
+    int(job_flow.instancecount).should.equal(12)
+    instance_group = job_flow.instancegroups[0]
+    int(instance_group.instancerunningcount).should.equal(6)
 
 
 @mock_emr
@@ -120,6 +177,31 @@ def test_terminate_job_flow():
     conn.terminate_jobflow(job_id)
     flow = conn.describe_jobflows()[0]
     flow.state.should.equal('TERMINATED')
+
+
+@mock_emr
+def test_describe_job_flows():
+    conn = boto.connect_emr()
+    job1_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[]
+    )
+    job2_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[]
+    )
+
+    jobs = conn.describe_jobflows()
+    jobs.should.have.length_of(2)
+
+    jobs = conn.describe_jobflows(jobflow_ids=[job2_id])
+    jobs.should.have.length_of(1)
+    jobs[0].jobflowid.should.equal(job2_id)
+
+    first_job = conn.describe_jobflow(job1_id)
+    first_job.jobflowid.should.equal(job1_id)
 
 
 @mock_emr
@@ -267,6 +349,7 @@ def test_modify_instance_groups():
     int(instance_group2.instancerunningcount).should.equal(3)
 
 
+@requires_boto_gte("2.8")
 @mock_emr
 def test_set_visible_to_all_users():
     conn = boto.connect_emr()
@@ -274,7 +357,6 @@ def test_set_visible_to_all_users():
     job_id = conn.run_jobflow(
         name='My jobflow',
         log_uri='s3://some_bucket/jobflow_logs',
-        job_flow_role='some-role-arn',
         steps=[],
         visible_to_all_users=False,
     )
@@ -290,3 +372,85 @@ def test_set_visible_to_all_users():
 
     job_flow = conn.describe_jobflow(job_id)
     job_flow.visibletoallusers.should.equal('False')
+
+
+@requires_boto_gte("2.8")
+@mock_emr
+def test_set_termination_protection():
+    conn = boto.connect_emr()
+
+    job_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[]
+    )
+    job_flow = conn.describe_jobflow(job_id)
+    job_flow.terminationprotected.should.equal(u'None')
+
+    conn.set_termination_protection(job_id, True)
+
+    job_flow = conn.describe_jobflow(job_id)
+    job_flow.terminationprotected.should.equal('true')
+
+    conn.set_termination_protection(job_id, False)
+
+    job_flow = conn.describe_jobflow(job_id)
+    job_flow.terminationprotected.should.equal('false')
+
+
+@mock_emr
+def test_list_clusters():
+    conn = boto.connect_emr()
+    conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[],
+    )
+
+    summary = conn.list_clusters()
+    clusters = summary.clusters
+    clusters.should.have.length_of(1)
+    cluster = clusters[0]
+    cluster.name.should.equal("My jobflow")
+    cluster.normalizedinstancehours.should.equal('0')
+    cluster.status.state.should.equal("RUNNING")
+
+
+@mock_emr
+def test_describe_cluster():
+    conn = boto.connect_emr()
+    job_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[],
+    )
+
+    cluster = conn.describe_cluster(job_id)
+    cluster.name.should.equal("My jobflow")
+    cluster.normalizedinstancehours.should.equal('0')
+    cluster.status.state.should.equal("RUNNING")
+
+
+@mock_emr
+def test_cluster_tagging():
+    conn = boto.connect_emr()
+    job_id = conn.run_jobflow(
+        name='My jobflow',
+        log_uri='s3://some_bucket/jobflow_logs',
+        steps=[],
+    )
+    cluster_id = job_id
+    conn.add_tags(cluster_id, {"tag1": "val1", "tag2": "val2"})
+
+    cluster = conn.describe_cluster(cluster_id)
+    cluster.tags.should.have.length_of(2)
+    tags = dict((tag.key, tag.value) for tag in cluster.tags)
+    tags['tag1'].should.equal('val1')
+    tags['tag2'].should.equal('val2')
+
+    # Remove a tag
+    conn.remove_tags(cluster_id, ["tag1"])
+    cluster = conn.describe_cluster(cluster_id)
+    cluster.tags.should.have.length_of(1)
+    tags = dict((tag.key, tag.value) for tag in cluster.tags)
+    tags['tag2'].should.equal('val2')

@@ -1,4 +1,6 @@
+from __future__ import unicode_literals
 import json
+import six
 
 from moto.core.responses import BaseResponse
 from moto.core.utils import camelcase_to_underscores
@@ -49,15 +51,16 @@ class DynamoHandler(BaseResponse):
         return status, self.response_headers, dynamo_json_dump({'__type': type_})
 
     def call_action(self):
-        if 'GetSessionToken' in self.body:
+        body = self.body.decode('utf-8')
+        if 'GetSessionToken' in body:
             return 200, self.response_headers, sts_handler()
 
-        self.body = json.loads(self.body or '{}')
+        self.body = json.loads(body or '{}')
         endpoint = self.get_endpoint_name(self.headers)
         if endpoint:
             endpoint = camelcase_to_underscores(endpoint)
             response = getattr(self, endpoint)()
-            if isinstance(response, basestring):
+            if isinstance(response, six.string_types):
                 return 200, self.response_headers, response
 
             else:
@@ -72,10 +75,10 @@ class DynamoHandler(BaseResponse):
         limit = body.get('Limit')
         if body.get("ExclusiveStartTableName"):
             last = body.get("ExclusiveStartTableName")
-            start = dynamodb_backend2.tables.keys().index(last) + 1
+            start = list(dynamodb_backend2.tables.keys()).index(last) + 1
         else:
             start = 0
-        all_tables = dynamodb_backend2.tables.keys()
+        all_tables = list(dynamodb_backend2.tables.keys())
         if limit:
             tables = all_tables[start:start + limit]
         else:
@@ -87,20 +90,22 @@ class DynamoHandler(BaseResponse):
 
     def create_table(self):
         body = self.body
-        #get the table name
+        # get the table name
         table_name = body['TableName']
-        #get the throughput
-        throughput = body["ProvisionedThroughput"]        
-        #getting the schema
+        # get the throughput
+        throughput = body["ProvisionedThroughput"]
+        # getting the schema
         key_schema = body['KeySchema']
-        #getting attribute definition
+        # getting attribute definition
         attr = body["AttributeDefinitions"]
-        #getting the indexes
-        table = dynamodb_backend2.create_table(table_name, 
-                   schema = key_schema,           
-                   throughput = throughput, 
-                   attr = attr)
-        return dynamo_json_dump(table.describe)        
+        # getting the indexes
+        global_indexes = body.get("GlobalSecondaryIndexes", [])
+        table = dynamodb_backend2.create_table(table_name,
+                   schema=key_schema,
+                   throughput=throughput,
+                   attr=attr,
+                   global_indexes=global_indexes)
+        return dynamo_json_dump(table.describe)
 
     def delete_table(self):
         name = self.body['TableName']
@@ -129,8 +134,18 @@ class DynamoHandler(BaseResponse):
     def put_item(self):
         name = self.body['TableName']
         item = self.body['Item']
-        result = dynamodb_backend2.put_item(name, item)
-        
+        overwrite = 'Expected' not in self.body
+        if not overwrite:
+            expected = self.body['Expected']
+        else:
+            expected = None
+
+        try:
+            result = dynamodb_backend2.put_item(name, item, expected, overwrite)
+        except Exception:
+            er = 'com.amazonaws.dynamodb.v20111205#ConditionalCheckFailedException'
+            return self.error(er)
+
         if result:
             item_dict = result.to_json()
             item_dict['ConsumedCapacityUnits'] = 1
@@ -142,10 +157,10 @@ class DynamoHandler(BaseResponse):
     def batch_write_item(self):
         table_batches = self.body['RequestItems']
 
-        for table_name, table_requests in table_batches.iteritems():
+        for table_name, table_requests in table_batches.items():
             for table_request in table_requests:
-                request_type = table_request.keys()[0]
-                request = table_request.values()[0]
+                request_type = list(table_request.keys())[0]
+                request = list(table_request.values())[0]
                 if request_type == 'PutRequest':
                     item = request['Item']
                     dynamodb_backend2.put_item(table_name, item)
@@ -166,6 +181,7 @@ class DynamoHandler(BaseResponse):
         }
 
         return dynamo_json_dump(response)
+
     def get_item(self):
         name = self.body['TableName']
         key = self.body['Key']
@@ -175,30 +191,29 @@ class DynamoHandler(BaseResponse):
             er = 'com.amazon.coral.validate#ValidationException'
             return self.error(er, status=400)
         if item:
-            item_dict = item.describe_attrs(attributes = None)
+            item_dict = item.describe_attrs(attributes=None)
             item_dict['ConsumedCapacityUnits'] = 0.5
             return dynamo_json_dump(item_dict)
         else:
             # Item not found
-            er = 'com.amazonaws.dynamodb.v20111205#ResourceNotFoundException'
-            return self.error(er, status=404)
+            er = '{}'
+            return self.error(er, status=200)
 
     def batch_get_item(self):
         table_batches = self.body['RequestItems']
 
-        results = { 
-            "ConsumedCapacity":[],
-            "Responses": {                
+        results = {
+            "ConsumedCapacity": [],
+            "Responses": {
             },
             "UnprocessedKeys": {
             }
         }
 
-        for table_name, table_request in table_batches.iteritems():
-            items = []
+        for table_name, table_request in table_batches.items():
             keys = table_request['Keys']
             attributes_to_get = table_request.get('AttributesToGet')
-            results["Responses"][table_name]=[]
+            results["Responses"][table_name] = []
             for key in keys:
                 item = dynamodb_backend2.get_item(table_name, key)
                 if item:
@@ -213,38 +228,75 @@ class DynamoHandler(BaseResponse):
 
     def query(self):
         name = self.body['TableName']
-        keys = self.body['KeyConditions']
-        hash_key_name, range_key_name = dynamodb_backend2.get_table_keys_name(name)
-        if hash_key_name is None:
-            er = "'com.amazonaws.dynamodb.v20120810#ResourceNotFoundException"  
-            return self.error(er)
-        hash_key = keys[hash_key_name]['AttributeValueList'][0]
-        if len(keys) == 1:
-            range_comparison = None
-            range_values = []
-        else:
-            if range_key_name == None:
-                er = "com.amazon.coral.validate#ValidationException"  
-                return self.error(er)
-            else:
-                range_condition = keys[range_key_name]
-                if range_condition:
-                    range_comparison = range_condition['ComparisonOperator']
-                    range_values = range_condition['AttributeValueList']
+
+        # {u'KeyConditionExpression': u'#n0 = :v0', u'ExpressionAttributeValues': {u':v0': {u'S': u'johndoe'}}, u'ExpressionAttributeNames': {u'#n0': u'username'}}
+        key_condition_expression = self.body.get('KeyConditionExpression')
+        if key_condition_expression:
+            value_alias_map = self.body['ExpressionAttributeValues']
+
+            if " AND " in key_condition_expression:
+                expressions = key_condition_expression.split(" AND ", 1)
+                hash_key_expression = expressions[0]
+                # TODO implement more than one range expression and OR operators
+                range_key_expression = expressions[1].replace(")", "")
+                range_key_expression_components = range_key_expression.split()
+                range_comparison = range_key_expression_components[1]
+                if 'AND' in range_key_expression:
+                    range_comparison = 'BETWEEN'
+                    range_values = [
+                        value_alias_map[range_key_expression_components[2]],
+                        value_alias_map[range_key_expression_components[4]],
+                    ]
+                elif 'begins_with' in range_key_expression:
+                    range_comparison = 'BEGINS_WITH'
+                    range_values = [
+                        value_alias_map[range_key_expression_components[1]],
+                    ]
                 else:
+                    range_values = [value_alias_map[range_key_expression_components[2]]]
+            else:
+                hash_key_expression = key_condition_expression
+                range_comparison = None
+                range_values = []
+
+            hash_key_value_alias = hash_key_expression.split("=")[1].strip()
+            hash_key = value_alias_map[hash_key_value_alias]
+        else:
+            # 'KeyConditions': {u'forum_name': {u'ComparisonOperator': u'EQ', u'AttributeValueList': [{u'S': u'the-key'}]}}
+            key_conditions = self.body.get('KeyConditions')
+            if key_conditions:
+                hash_key_name, range_key_name = dynamodb_backend2.get_table_keys_name(name, key_conditions.keys())
+                if hash_key_name is None:
+                    er = "'com.amazonaws.dynamodb.v20120810#ResourceNotFoundException"
+                    return self.error(er)
+                hash_key = key_conditions[hash_key_name]['AttributeValueList'][0]
+                if len(key_conditions) == 1:
                     range_comparison = None
                     range_values = []
+                else:
+                    if range_key_name is None:
+                        er = "com.amazon.coral.validate#ValidationException"
+                        return self.error(er)
+                    else:
+                        range_condition = key_conditions[range_key_name]
+                        if range_condition:
+                            range_comparison = range_condition['ComparisonOperator']
+                            range_values = range_condition['AttributeValueList']
+                        else:
+                            range_comparison = None
+                            range_values = []
+
         items, last_page = dynamodb_backend2.query(name, hash_key, range_comparison, range_values)
         if items is None:
             er = 'com.amazonaws.dynamodb.v20111205#ResourceNotFoundException'
-            return self.error(er) 
+            return self.error(er)
 
         limit = self.body.get("Limit")
         if limit:
             items = items[:limit]
 
         reversed = self.body.get("ScanIndexForward")
-        if reversed != False:
+        if reversed is False:
             items.reverse()
 
         result = {
@@ -266,7 +318,7 @@ class DynamoHandler(BaseResponse):
 
         filters = {}
         scan_filters = self.body.get('ScanFilter', {})
-        for attribute_name, scan_filter in scan_filters.iteritems():
+        for attribute_name, scan_filter in scan_filters.items():
             # Keys are attribute names. Values are tuples of (comparison, comparison_value)
             comparison_operator = scan_filter["ComparisonOperator"]
             comparison_values = scan_filter.get("AttributeValueList", [])
@@ -312,3 +364,13 @@ class DynamoHandler(BaseResponse):
         else:
             er = 'com.amazonaws.dynamodb.v20120810#ConditionalCheckFailedException'
             return self.error(er)
+
+    def update_item(self):
+        name = self.body['TableName']
+        key = self.body['Key']
+        update_expression = self.body['UpdateExpression']
+        item = dynamodb_backend2.update_item(name, key, update_expression)
+
+        item_dict = item.to_json()
+        item_dict['ConsumedCapacityUnits'] = 0.5
+        return dynamo_json_dump(item_dict)

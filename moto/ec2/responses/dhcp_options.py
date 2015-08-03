@@ -1,15 +1,8 @@
-from jinja2 import Template
+from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
 from moto.ec2.utils import (
     dhcp_configuration_from_querystring,
     sequence_from_querystring)
-from moto.ec2.models import ec2_backend
-from moto.ec2.exceptions import(
-    InvalidVPCIdError,
-    InvalidParameterValueError,
-)
-
-NETBIOS_NODE_TYPES = [1, 2, 4, 8]
 
 
 class DHCPOptions(BaseResponse):
@@ -17,13 +10,12 @@ class DHCPOptions(BaseResponse):
         dhcp_opt_id = self.querystring.get("DhcpOptionsId", [None])[0]
         vpc_id = self.querystring.get("VpcId", [None])[0]
 
-        dhcp_opt = ec2_backend.describe_dhcp_options([dhcp_opt_id])[0]
+        dhcp_opt = self.ec2_backend.describe_dhcp_options([dhcp_opt_id])[0]
+        vpc = self.ec2_backend.get_vpc(vpc_id)
 
-        vpc = ec2_backend.get_vpc(vpc_id)
+        self.ec2_backend.associate_dhcp_options(dhcp_opt, vpc)
 
-        ec2_backend.associate_dhcp_options(dhcp_opt, vpc)
-
-        template = Template(ASSOCIATE_DHCP_OPTIONS_RESPONSE)
+        template = self.response_template(ASSOCIATE_DHCP_OPTIONS_RESPONSE)
         return template.render()
 
     def create_dhcp_options(self):
@@ -37,14 +29,7 @@ class DHCPOptions(BaseResponse):
         netbios_name_servers = dhcp_config.get("netbios-name-servers", None)
         netbios_node_type = dhcp_config.get("netbios-node-type", None)
 
-        for field_value in domain_name_servers, ntp_servers, netbios_name_servers:
-            if field_value and len(field_value) > 4:
-                raise InvalidParameterValueError(",".join(field_value))
-
-        if netbios_node_type and netbios_node_type[0] not in NETBIOS_NODE_TYPES:
-            raise InvalidParameterValueError(netbios_node_type)
-
-        dhcp_options_set = ec2_backend.create_dhcp_options(
+        dhcp_options_set = self.ec2_backend.create_dhcp_options(
             domain_name_servers=domain_name_servers,
             domain_name=domain_name,
             ntp_servers=ntp_servers,
@@ -52,32 +37,24 @@ class DHCPOptions(BaseResponse):
             netbios_node_type=netbios_node_type
         )
 
-        template = Template(CREATE_DHCP_OPTIONS_RESPONSE)
+        template = self.response_template(CREATE_DHCP_OPTIONS_RESPONSE)
         return template.render(dhcp_options_set=dhcp_options_set)
 
     def delete_dhcp_options(self):
-        # TODO InvalidDhcpOptionsId.Malformed
-
-        delete_status = False
-
-        if "DhcpOptionsId" in self.querystring:
-            dhcp_opt_id = self.querystring["DhcpOptionsId"][0]
-
-            delete_status = ec2_backend.delete_dhcp_options_set(dhcp_opt_id)
-
-        template = Template(DELETE_DHCP_OPTIONS_RESPONSE)
+        dhcp_opt_id = self.querystring.get("DhcpOptionsId", [None])[0]
+        delete_status = self.ec2_backend.delete_dhcp_options_set(dhcp_opt_id)
+        template = self.response_template(DELETE_DHCP_OPTIONS_RESPONSE)
         return template.render(delete_status=delete_status)
 
     def describe_dhcp_options(self):
-
         if "Filter.1.Name" in self.querystring:
             raise NotImplementedError("Filtering not supported in describe_dhcp_options.")
         elif "DhcpOptionsId.1" in self.querystring:
             dhcp_opt_ids = sequence_from_querystring("DhcpOptionsId", self.querystring)
-            dhcp_opt = ec2_backend.describe_dhcp_options(dhcp_opt_ids)
+            dhcp_opt = self.ec2_backend.describe_dhcp_options(dhcp_opt_ids)
         else:
-            dhcp_opt = ec2_backend.describe_dhcp_options()
-        template = Template(DESCRIBE_DHCP_OPTIONS_RESPONSE)
+            dhcp_opt = self.ec2_backend.describe_dhcp_options()
+        template = self.response_template(DESCRIBE_DHCP_OPTIONS_RESPONSE)
         return template.render(dhcp_options=dhcp_opt)
 
 
@@ -87,7 +64,7 @@ CREATE_DHCP_OPTIONS_RESPONSE = u"""
   <dhcpOptions>
       <dhcpOptionsId>{{ dhcp_options_set.id }}</dhcpOptionsId>
       <dhcpConfigurationSet>
-      {% for key, values in dhcp_options_set.options.iteritems() %}
+      {% for key, values in dhcp_options_set.options.items() %}
         {{ values }}
         {% if values %}
         <item>
@@ -132,7 +109,7 @@ DESCRIBE_DHCP_OPTIONS_RESPONSE = u"""
     <dhcpOptions>
       <dhcpOptionsId>{{ dhcp_options_set.id }}</dhcpOptionsId>
       <dhcpConfigurationSet>
-      {% for key, values in dhcp_options_set.options.iteritems() %}
+      {% for key, values in dhcp_options_set.options.items() %}
         {{ values }}
         {% if values %}
         <item>

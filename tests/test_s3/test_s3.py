@@ -1,16 +1,45 @@
-import urllib2
+# -*- coding: utf-8 -*-
+
+from __future__ import unicode_literals
+from six.moves.urllib.request import urlopen
+from six.moves.urllib.error import HTTPError
+from functools import wraps
 from io import BytesIO
 
+import json
 import boto
+import boto3
 from boto.exception import S3CreateError, S3ResponseError
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 from freezegun import freeze_time
 import requests
+import tests.backport_assert_raises  # noqa
+from nose.tools import assert_raises
 
 import sure  # noqa
 
 from moto import mock_s3
+
+
+REDUCED_PART_SIZE = 256
+
+
+def reduced_min_part_size(f):
+    """ speed up tests by temporarily making the multipart minimum part size
+        small
+    """
+    import moto.s3.models as s3model
+    orig_size = s3model.UPLOAD_PART_MIN_SIZE
+
+    @wraps(f)
+    def wrapped(*args, **kwargs):
+        try:
+            s3model.UPLOAD_PART_MIN_SIZE = REDUCED_PART_SIZE
+            return f(*args, **kwargs)
+        finally:
+            s3model.UPLOAD_PART_MIN_SIZE = orig_size
+    return wrapped
 
 
 class MyModel(object):
@@ -36,7 +65,7 @@ def test_my_model_save():
     model_instance = MyModel('steve', 'is awesome')
     model_instance.save()
 
-    conn.get_bucket('mybucket').get_key('steve').get_contents_as_string().should.equal('is awesome')
+    conn.get_bucket('mybucket').get_key('steve').get_contents_as_string().should.equal(b'is awesome')
 
 
 @mock_s3
@@ -59,22 +88,23 @@ def test_multipart_upload_too_small():
     bucket = conn.create_bucket("foobar")
 
     multipart = bucket.initiate_multipart_upload("the-key")
-    multipart.upload_part_from_file(BytesIO('hello'), 1)
-    multipart.upload_part_from_file(BytesIO('world'), 2)
+    multipart.upload_part_from_file(BytesIO(b'hello'), 1)
+    multipart.upload_part_from_file(BytesIO(b'world'), 2)
     # Multipart with total size under 5MB is refused
     multipart.complete_upload.should.throw(S3ResponseError)
 
 
 @mock_s3
+@reduced_min_part_size
 def test_multipart_upload():
     conn = boto.connect_s3('the_key', 'the_secret')
     bucket = conn.create_bucket("foobar")
 
     multipart = bucket.initiate_multipart_upload("the-key")
-    part1 = '0' * 5242880
+    part1 = b'0' * REDUCED_PART_SIZE
     multipart.upload_part_from_file(BytesIO(part1), 1)
     # last part, can be less than 5 MB
-    part2 = '1'
+    part2 = b'1'
     multipart.upload_part_from_file(BytesIO(part2), 2)
     multipart.complete_upload()
     # we should get both parts as the key contents
@@ -82,6 +112,39 @@ def test_multipart_upload():
 
 
 @mock_s3
+@reduced_min_part_size
+def test_multipart_upload_out_of_order():
+    conn = boto.connect_s3('the_key', 'the_secret')
+    bucket = conn.create_bucket("foobar")
+
+    multipart = bucket.initiate_multipart_upload("the-key")
+    # last part, can be less than 5 MB
+    part2 = b'1'
+    multipart.upload_part_from_file(BytesIO(part2), 4)
+    part1 = b'0' * REDUCED_PART_SIZE
+    multipart.upload_part_from_file(BytesIO(part1), 2)
+    multipart.complete_upload()
+    # we should get both parts as the key contents
+    bucket.get_key("the-key").get_contents_as_string().should.equal(part1 + part2)
+
+
+@mock_s3
+@reduced_min_part_size
+def test_multipart_upload_with_headers():
+    conn = boto.connect_s3('the_key', 'the_secret')
+    bucket = conn.create_bucket("foobar")
+
+    multipart = bucket.initiate_multipart_upload("the-key", metadata={"foo": "bar"})
+    part1 = b'0' * 10
+    multipart.upload_part_from_file(BytesIO(part1), 1)
+    multipart.complete_upload()
+
+    key = bucket.get_key("the-key")
+    key.metadata.should.equal({"foo": "bar"})
+
+
+@mock_s3
+@reduced_min_part_size
 def test_multipart_upload_with_copy_key():
     conn = boto.connect_s3('the_key', 'the_secret')
     bucket = conn.create_bucket("foobar")
@@ -90,20 +153,21 @@ def test_multipart_upload_with_copy_key():
     key.set_contents_from_string("key_value")
 
     multipart = bucket.initiate_multipart_upload("the-key")
-    part1 = '0' * 5242880
+    part1 = b'0' * REDUCED_PART_SIZE
     multipart.upload_part_from_file(BytesIO(part1), 1)
     multipart.copy_part_from_key("foobar", "original-key", 2)
     multipart.complete_upload()
-    bucket.get_key("the-key").get_contents_as_string().should.equal(part1 + "key_value")
+    bucket.get_key("the-key").get_contents_as_string().should.equal(part1 + b"key_value")
 
 
 @mock_s3
+@reduced_min_part_size
 def test_multipart_upload_cancel():
     conn = boto.connect_s3('the_key', 'the_secret')
     bucket = conn.create_bucket("foobar")
 
     multipart = bucket.initiate_multipart_upload("the-key")
-    part1 = '0' * 5242880
+    part1 = b'0' * REDUCED_PART_SIZE
     multipart.upload_part_from_file(BytesIO(part1), 1)
     multipart.cancel_upload()
     # TODO we really need some sort of assertion here, but we don't currently
@@ -111,21 +175,60 @@ def test_multipart_upload_cancel():
 
 
 @mock_s3
+@reduced_min_part_size
 def test_multipart_etag():
     # Create Bucket so that test can run
     conn = boto.connect_s3('the_key', 'the_secret')
     bucket = conn.create_bucket('mybucket')
 
     multipart = bucket.initiate_multipart_upload("the-key")
-    part1 = '0' * 5242880
+    part1 = b'0' * REDUCED_PART_SIZE
     multipart.upload_part_from_file(BytesIO(part1), 1)
     # last part, can be less than 5 MB
-    part2 = '1'
+    part2 = b'1'
     multipart.upload_part_from_file(BytesIO(part2), 2)
     multipart.complete_upload()
     # we should get both parts as the key contents
     bucket.get_key("the-key").etag.should.equal(
-        '"140f92a6df9f9e415f74a1463bcee9bb-2"')
+        '"66d1a1a2ed08fd05c137f316af4ff255-2"')
+
+
+@mock_s3
+@reduced_min_part_size
+def test_multipart_invalid_order():
+    # Create Bucket so that test can run
+    conn = boto.connect_s3('the_key', 'the_secret')
+    bucket = conn.create_bucket('mybucket')
+
+    multipart = bucket.initiate_multipart_upload("the-key")
+    part1 = b'0' * 5242880
+    etag1 = multipart.upload_part_from_file(BytesIO(part1), 1).etag
+    # last part, can be less than 5 MB
+    part2 = b'1'
+    etag2 = multipart.upload_part_from_file(BytesIO(part2), 2).etag
+    xml = "<Part><PartNumber>{0}</PartNumber><ETag>{1}</ETag></Part>"
+    xml = xml.format(2, etag2) + xml.format(1, etag1)
+    xml = "<CompleteMultipartUpload>{0}</CompleteMultipartUpload>".format(xml)
+    bucket.complete_multipart_upload.when.called_with(
+        multipart.key_name, multipart.id, xml).should.throw(S3ResponseError)
+
+
+@mock_s3
+@reduced_min_part_size
+def test_multipart_duplicate_upload():
+    conn = boto.connect_s3('the_key', 'the_secret')
+    bucket = conn.create_bucket("foobar")
+
+    multipart = bucket.initiate_multipart_upload("the-key")
+    part1 = b'0' * REDUCED_PART_SIZE
+    multipart.upload_part_from_file(BytesIO(part1), 1)
+    # same part again
+    multipart.upload_part_from_file(BytesIO(part1), 1)
+    part2 = b'1' * 1024
+    multipart.upload_part_from_file(BytesIO(part2), 2)
+    multipart.complete_upload()
+    # We should get only one copy of part 1.
+    bucket.get_key("the-key").get_contents_as_string().should.equal(part1 + part2)
 
 
 @mock_s3
@@ -171,7 +274,7 @@ def test_missing_key_urllib2():
     conn = boto.connect_s3('the_key', 'the_secret')
     conn.create_bucket("foobar")
 
-    urllib2.urlopen.when.called_with("http://foobar.s3.amazonaws.com/the-key").should.throw(urllib2.HTTPError)
+    urlopen.when.called_with("http://foobar.s3.amazonaws.com/the-key").should.throw(HTTPError)
 
 
 @mock_s3
@@ -182,7 +285,9 @@ def test_empty_key():
     key.key = "the-key"
     key.set_contents_from_string("")
 
-    bucket.get_key("the-key").get_contents_as_string().should.equal('')
+    key = bucket.get_key("the-key")
+    key.size.should.equal(0)
+    key.get_contents_as_string().should.equal(b'')
 
 
 @mock_s3
@@ -193,10 +298,12 @@ def test_empty_key_set_on_existing_key():
     key.key = "the-key"
     key.set_contents_from_string("foobar")
 
-    bucket.get_key("the-key").get_contents_as_string().should.equal('foobar')
+    key = bucket.get_key("the-key")
+    key.size.should.equal(6)
+    key.get_contents_as_string().should.equal(b'foobar')
 
     key.set_contents_from_string("")
-    bucket.get_key("the-key").get_contents_as_string().should.equal('')
+    bucket.get_key("the-key").get_contents_as_string().should.equal(b'')
 
 
 @mock_s3
@@ -207,7 +314,7 @@ def test_large_key_save():
     key.key = "the-key"
     key.set_contents_from_string("foobar" * 100000)
 
-    bucket.get_key("the-key").get_contents_as_string().should.equal('foobar' * 100000)
+    bucket.get_key("the-key").get_contents_as_string().should.equal(b'foobar' * 100000)
 
 
 @mock_s3
@@ -220,8 +327,8 @@ def test_copy_key():
 
     bucket.copy_key('new-key', 'foobar', 'the-key')
 
-    bucket.get_key("the-key").get_contents_as_string().should.equal("some value")
-    bucket.get_key("new-key").get_contents_as_string().should.equal("some value")
+    bucket.get_key("the-key").get_contents_as_string().should.equal(b"some value")
+    bucket.get_key("new-key").get_contents_as_string().should.equal(b"some value")
 
 
 @mock_s3
@@ -263,7 +370,7 @@ def test_last_modified():
     key.set_contents_from_string("some value")
 
     rs = bucket.get_all_keys()
-    rs[0].last_modified.should.equal('2012-01-01T12:00:00Z')
+    rs[0].last_modified.should.equal('2012-01-01T12:00:00.000Z')
 
     bucket.get_key("the-key").last_modified.should.equal('Sun, 01 Jan 2012 12:00:00 GMT')
 
@@ -283,9 +390,27 @@ def test_bucket_with_dash():
 @mock_s3
 def test_create_existing_bucket():
     "Trying to create a bucket that already exists should raise an Error"
-    conn = boto.connect_s3('the_key', 'the_secret')
+    conn = boto.s3.connect_to_region("us-west-2")
     conn.create_bucket("foobar")
-    conn.create_bucket.when.called_with('foobar').should.throw(S3CreateError)
+    with assert_raises(S3CreateError):
+        conn.create_bucket('foobar')
+
+
+@mock_s3
+def test_create_existing_bucket_in_us_east_1():
+    "Trying to create a bucket that already exists in us-east-1 returns the bucket"
+
+    """"
+    http://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
+    Your previous request to create the named bucket succeeded and you already
+    own it. You get this error in all AWS regions except US Standard,
+    us-east-1. In us-east-1 region, you will get 200 OK, but it is no-op (if
+    bucket exists it Amazon S3 will not do anything).
+    """
+    conn = boto.s3.connect_to_region("us-east-1")
+    conn.create_bucket("foobar")
+    bucket = conn.create_bucket("foobar")
+    bucket.name.should.equal("foobar")
 
 
 @mock_s3
@@ -337,7 +462,7 @@ def test_post_to_bucket():
         'file': 'nothing'
     })
 
-    bucket.get_key('the-key').get_contents_as_string().should.equal('nothing')
+    bucket.get_key('the-key').get_contents_as_string().should.equal(b'nothing')
 
 
 @mock_s3
@@ -352,6 +477,14 @@ def test_post_with_metadata_to_bucket():
     })
 
     bucket.get_key('the-key').get_metadata('test').should.equal('metadata')
+
+
+@mock_s3
+def test_delete_missing_key():
+    conn = boto.connect_s3('the_key', 'the_secret')
+    bucket = conn.create_bucket('foobar')
+
+    bucket.delete_key.when.called_with('foobar').should.throw(S3ResponseError)
 
 
 @mock_s3
@@ -454,7 +587,7 @@ def test_bucket_key_listing_order():
     # Test delimiter with no prefix
     delimiter = '/'
     keys = [x.name for x in bucket.list(prefix=None, delimiter=delimiter)]
-    keys.should.equal(['toplevel'])
+    keys.should.equal(['toplevel/'])
 
     delimiter = None
     keys = [x.name for x in bucket.list(prefix + 'x', delimiter)]
@@ -584,18 +717,18 @@ def test_list_versions():
 
     versions[0].name.should.equal('the-key')
     versions[0].version_id.should.equal('0')
-    versions[0].get_contents_as_string().should.equal("Version 1")
+    versions[0].get_contents_as_string().should.equal(b"Version 1")
 
     versions[1].name.should.equal('the-key')
     versions[1].version_id.should.equal('1')
-    versions[1].get_contents_as_string().should.equal("Version 2")
+    versions[1].get_contents_as_string().should.equal(b"Version 2")
 
 
 @mock_s3
 def test_acl_is_ignored_for_now():
     conn = boto.connect_s3()
     bucket = conn.create_bucket('foobar')
-    content = 'imafile'
+    content = b'imafile'
     keyname = 'test.txt'
 
     key = Key(bucket, name=keyname)
@@ -606,3 +739,149 @@ def test_acl_is_ignored_for_now():
     key = bucket.get_key(keyname)
 
     assert key.get_contents_as_string() == content
+
+
+@mock_s3
+def test_unicode_key():
+    conn = boto.connect_s3()
+    bucket = conn.create_bucket('mybucket')
+    key = Key(bucket)
+    key.key = u'こんにちは.jpg'
+    key.set_contents_from_string('Hello world!')
+    list(bucket.list())
+    key = bucket.get_key(key.key)
+    assert key.get_contents_as_string().decode("utf-8") == 'Hello world!'
+
+
+@mock_s3
+def test_unicode_value():
+    conn = boto.connect_s3()
+    bucket = conn.create_bucket('mybucket')
+    key = Key(bucket)
+    key.key = 'some_key'
+    key.set_contents_from_string(u'こんにちは.jpg')
+    list(bucket.list())
+    key = bucket.get_key(key.key)
+    assert key.get_contents_as_string().decode("utf-8") == u'こんにちは.jpg'
+
+
+@mock_s3
+def test_setting_content_encoding():
+    conn = boto.connect_s3()
+    bucket = conn.create_bucket('mybucket')
+    key = bucket.new_key("keyname")
+    key.set_metadata("Content-Encoding", "gzip")
+    compressed_data = "abcdef"
+    key.set_contents_from_string(compressed_data)
+
+    key = bucket.get_key("keyname")
+    key.content_encoding.should.equal("gzip")
+
+
+@mock_s3
+def test_bucket_location():
+    conn = boto.s3.connect_to_region("us-west-2")
+    bucket = conn.create_bucket('mybucket')
+    bucket.get_location().should.equal("us-west-2")
+
+
+@mock_s3
+def test_ranged_get():
+    conn = boto.connect_s3()
+    bucket = conn.create_bucket('mybucket')
+    key = Key(bucket)
+    key.key = 'bigkey'
+    rep = b"0123456789"
+    key.set_contents_from_string(rep * 10)
+
+    # Implicitly bounded range requests.
+    key.get_contents_as_string(headers={'Range': 'bytes=0-'}).should.equal(rep * 10)
+    key.get_contents_as_string(headers={'Range': 'bytes=50-'}).should.equal(rep * 5)
+    key.get_contents_as_string(headers={'Range': 'bytes=99-'}).should.equal(b'9')
+
+    # Explicitly bounded range requests starting from the first byte.
+    key.get_contents_as_string(headers={'Range': 'bytes=0-0'}).should.equal(b'0')
+    key.get_contents_as_string(headers={'Range': 'bytes=0-49'}).should.equal(rep * 5)
+    key.get_contents_as_string(headers={'Range': 'bytes=0-99'}).should.equal(rep * 10)
+    key.get_contents_as_string(headers={'Range': 'bytes=0-100'}).should.equal(rep * 10)
+    key.get_contents_as_string(headers={'Range': 'bytes=0-700'}).should.equal(rep * 10)
+
+    # Explicitly bounded range requests starting from the / a middle byte.
+    key.get_contents_as_string(headers={'Range': 'bytes=50-54'}).should.equal(rep[:5])
+    key.get_contents_as_string(headers={'Range': 'bytes=50-99'}).should.equal(rep * 5)
+    key.get_contents_as_string(headers={'Range': 'bytes=50-100'}).should.equal(rep * 5)
+    key.get_contents_as_string(headers={'Range': 'bytes=50-700'}).should.equal(rep * 5)
+
+    # Explicitly bounded range requests starting from the last byte.
+    key.get_contents_as_string(headers={'Range': 'bytes=99-99'}).should.equal(b'9')
+    key.get_contents_as_string(headers={'Range': 'bytes=99-100'}).should.equal(b'9')
+    key.get_contents_as_string(headers={'Range': 'bytes=99-700'}).should.equal(b'9')
+
+    # Suffix range requests.
+    key.get_contents_as_string(headers={'Range': 'bytes=-1'}).should.equal(b'9')
+    key.get_contents_as_string(headers={'Range': 'bytes=-60'}).should.equal(rep * 6)
+    key.get_contents_as_string(headers={'Range': 'bytes=-100'}).should.equal(rep * 10)
+    key.get_contents_as_string(headers={'Range': 'bytes=-101'}).should.equal(rep * 10)
+    key.get_contents_as_string(headers={'Range': 'bytes=-700'}).should.equal(rep * 10)
+
+    key.size.should.equal(100)
+
+
+@mock_s3
+def test_policy():
+    conn = boto.connect_s3()
+    bucket_name = 'mybucket'
+    bucket = conn.create_bucket(bucket_name)
+
+    policy = json.dumps({
+        "Version": "2012-10-17",
+        "Id": "PutObjPolicy",
+        "Statement": [
+            {
+                "Sid": "DenyUnEncryptedObjectUploads",
+                "Effect": "Deny",
+                "Principal": "*",
+                "Action": "s3:PutObject",
+                "Resource": "arn:aws:s3:::{bucket_name}/*".format(bucket_name=bucket_name),
+                "Condition": {
+                    "StringNotEquals": {
+                        "s3:x-amz-server-side-encryption": "aws:kms"
+                    }
+                }
+            }
+        ]
+    })
+
+    with assert_raises(S3ResponseError) as err:
+        bucket.get_policy()
+
+    ex = err.exception
+    ex.box_usage.should.be.none
+    ex.error_code.should.equal('NoSuchBucketPolicy')
+    ex.message.should.equal('The bucket policy does not exist')
+    ex.reason.should.equal('Not Found')
+    ex.resource.should.be.none
+    ex.status.should.equal(404)
+    ex.body.should.contain(bucket_name)
+    ex.request_id.should_not.be.none
+
+    bucket.set_policy(policy).should.be.true
+
+    bucket = conn.get_bucket(bucket_name)
+
+    bucket.get_policy().decode('utf-8').should.equal(policy)
+
+
+"""
+boto3
+"""
+
+
+@mock_s3
+def test_boto3_bucket_create():
+    s3 = boto3.resource('s3', region_name='us-east-1')
+    s3.create_bucket(Bucket="blah")
+
+    s3.Object('blah', 'hello.txt').put(Body="some text")
+
+    s3.Object('blah', 'hello.txt').get()['Body'].read().decode("utf-8").should.equal("some text")

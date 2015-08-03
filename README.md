@@ -57,6 +57,10 @@ It gets even better! Moto isn't just S3. Here's the status of the other AWS serv
 |------------------------------------------------------------------------------|
 | Autoscaling           | @mock_autoscaling| core endpoints done               |
 |------------------------------------------------------------------------------|
+| Cloudformation        | @mock_cloudformation| core endpoints done            |
+|------------------------------------------------------------------------------|
+| Cloudwatch            | @mock_cloudwatch | basic endpoints done              |
+|------------------------------------------------------------------------------|
 | DynamoDB              | @mock_dynamodb   | core endpoints done               |
 | DynamoDB2             | @mock_dynamodb2  | core endpoints done - no indexes  |
 |------------------------------------------------------------------------------|
@@ -69,13 +73,27 @@ It gets even better! Moto isn't just S3. Here's the status of the other AWS serv
 |------------------------------------------------------------------------------|
 | ELB                   | @mock_elb        | core endpoints done               |
 |------------------------------------------------------------------------------|
+| EMR                   | @mock_emr        | core endpoints done               |
+|------------------------------------------------------------------------------|
+| Glacier               | @mock_glacier    | core endpoints done               |
+|------------------------------------------------------------------------------|
 | IAM                   | @mock_iam        | core endpoints done               |
+|------------------------------------------------------------------------------|
+| Kinesis               | @mock_kinesis    | core endpoints done               |
+|------------------------------------------------------------------------------|
+| RDS                   | @mock_rds        | core endpoints done               |
+|------------------------------------------------------------------------------|
+| RDS2                  | @mock_rds2       | core endpoints done               |
+|------------------------------------------------------------------------------|
+| Redshift              | @mock_redshift   | core endpoints done               |
 |------------------------------------------------------------------------------|
 | Route53               | @mock_route53    | core endpoints done               |
 |------------------------------------------------------------------------------|
 | S3                    | @mock_s3         | core endpoints done               |
 |------------------------------------------------------------------------------|
 | SES                   | @mock_ses        | core endpoints done               |
+|------------------------------------------------------------------------------|
+| SNS                   | @mock_sns        | core endpoints done               |
 |------------------------------------------------------------------------------|
 | SQS                   | @mock_sqs        | core endpoints done               |
 |------------------------------------------------------------------------------|
@@ -183,6 +201,16 @@ $ moto_server ec2 -p3000
 
 
 Then go to [localhost](http://localhost:5000/?Action=DescribeInstances) to see a list of running instances (it will be empty since you haven't added any yet).
+
+If you want to use boto with this (using the simpler decorators above instead is strongly encouraged), the easiest way is to create a boto config file (`~/.boto`) with the following values:
+
+```
+[Boto]
+is_secure = False
+https_validate_certificates = False
+proxy_port = 5000
+proxy = 127.0.0.1
+```
 
 ## Install
 

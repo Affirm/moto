@@ -1,14 +1,9 @@
+from __future__ import unicode_literals
 from collections import defaultdict
 import datetime
 import json
 
-try:
-    from collections import OrderedDict
-except ImportError:
-    # python 2.6 or earlier, use backport
-    from ordereddict import OrderedDict
-
-
+from moto.compat import OrderedDict
 from moto.core import BaseBackend
 from .comparisons import get_comparison_func
 from .utils import unix_time
@@ -30,8 +25,8 @@ class DynamoType(object):
     """
 
     def __init__(self, type_as_dict):
-        self.type = type_as_dict.keys()[0]
-        self.value = type_as_dict.values()[0]
+        self.type = list(type_as_dict.keys())[0]
+        self.value = list(type_as_dict.values())[0]
 
     def __hash__(self):
         return hash((self.type, self.value))
@@ -65,7 +60,7 @@ class Item(object):
         self.range_key_type = range_key_type
 
         self.attrs = {}
-        for key, value in attrs.iteritems():
+        for key, value in attrs.items():
             self.attrs[key] = DynamoType(value)
 
     def __repr__(self):
@@ -73,7 +68,7 @@ class Item(object):
 
     def to_json(self):
         attributes = {}
-        for attribute_key, attribute in self.attrs.iteritems():
+        for attribute_key, attribute in self.attrs.items():
             attributes[attribute_key] = attribute.value
 
         return {
@@ -83,7 +78,7 @@ class Item(object):
     def describe_attrs(self, attributes):
         if attributes:
             included = {}
-            for key, value in self.attrs.iteritems():
+            for key, value in self.attrs.items():
                 if key in attributes:
                     included[key] = value
         else:
@@ -142,7 +137,7 @@ class Table(object):
 
     def __len__(self):
         count = 0
-        for key, value in self.items.iteritems():
+        for key, value in self.items.items():
             if self.has_range_key:
                 count += len(value)
             else:
@@ -151,6 +146,9 @@ class Table(object):
 
     def __nonzero__(self):
         return True
+
+    def __bool__(self):
+        return self.__nonzero__()
 
     def put_item(self, item_attrs):
         hash_value = DynamoType(item_attrs.get(self.hash_key_attr))
@@ -212,7 +210,7 @@ class Table(object):
         for result in self.all_items():
             scanned_count += 1
             passes_all_conditions = True
-            for attribute_name, (comparison_operator, comparison_objs) in filters.iteritems():
+            for attribute_name, (comparison_operator, comparison_objs) in filters.items():
                 attribute = result.attrs.get(attribute_name)
 
                 if attribute:
@@ -295,7 +293,7 @@ class DynamoDBBackend(BaseBackend):
             return None, None, None
 
         scan_filters = {}
-        for key, (comparison_operator, comparison_values) in filters.iteritems():
+        for key, (comparison_operator, comparison_values) in filters.items():
             dynamo_types = [DynamoType(value) for value in comparison_values]
             scan_filters[key] = (comparison_operator, dynamo_types)
 

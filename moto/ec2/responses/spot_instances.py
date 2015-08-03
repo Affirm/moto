@@ -1,22 +1,14 @@
-from jinja2 import Template
-
+from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
-from moto.ec2.models import ec2_backend
+from moto.ec2.utils import filters_from_querystring
 
 
 class SpotInstances(BaseResponse):
-    def _get_param(self, param_name):
-        return self.querystring.get(param_name, [None])[0]
-
-    def _get_int_param(self, param_name):
-        value = self._get_param(param_name)
-        if value is not None:
-            return int(value)
 
     def cancel_spot_instance_requests(self):
         request_ids = self._get_multi_param('SpotInstanceRequestId')
-        requests = ec2_backend.cancel_spot_instance_requests(request_ids)
-        template = Template(CANCEL_SPOT_INSTANCES_TEMPLATE)
+        requests = self.ec2_backend.cancel_spot_instance_requests(request_ids)
+        template = self.response_template(CANCEL_SPOT_INSTANCES_TEMPLATE)
         return template.render(requests=requests)
 
     def create_spot_datafeed_subscription(self):
@@ -29,8 +21,9 @@ class SpotInstances(BaseResponse):
         raise NotImplementedError('SpotInstances.describe_spot_datafeed_subscription is not yet implemented')
 
     def describe_spot_instance_requests(self):
-        requests = ec2_backend.describe_spot_instance_requests()
-        template = Template(DESCRIBE_SPOT_INSTANCES_TEMPLATE)
+        filters = filters_from_querystring(self.querystring)
+        requests = self.ec2_backend.describe_spot_instance_requests(filters=filters)
+        template = self.response_template(DESCRIBE_SPOT_INSTANCES_TEMPLATE)
         return template.render(requests=requests)
 
     def describe_spot_price_history(self):
@@ -55,7 +48,7 @@ class SpotInstances(BaseResponse):
         monitoring_enabled = self._get_param('LaunchSpecification.Monitoring.Enabled')
         subnet_id = self._get_param('LaunchSpecification.SubnetId')
 
-        requests = ec2_backend.request_spot_instances(
+        requests = self.ec2_backend.request_spot_instances(
             price=price,
             image_id=image_id,
             count=count,
@@ -75,7 +68,7 @@ class SpotInstances(BaseResponse):
             subnet_id=subnet_id,
         )
 
-        template = Template(REQUEST_SPOT_INSTANCES_TEMPLATE)
+        template = self.response_template(REQUEST_SPOT_INSTANCES_TEMPLATE)
         return template.render(requests=requests)
 
 
@@ -90,9 +83,10 @@ REQUEST_SPOT_INSTANCES_TEMPLATE = """<RequestSpotInstancesResponse xmlns="http:/
       <state>{{ request.state }}</state>
       <status>
         <code>pending-evaluation</code>
-        <updateTime>YYYY-MM-DDTHH:MM:SS.000Z</updateTime>
+        <updateTime>2015-01-01T00:00:00.000Z</updateTime>
         <message>Your Spot request has been submitted for review, and is pending evaluation.</message>
       </status>
+      <instanceId>{{ request.instance_id }}</instanceId>
       <availabilityZoneGroup>{{ request.availability_zone_group }}</availabilityZoneGroup>
       <launchSpecification>
         <imageId>{{ request.launch_specification.image_id }}</imageId>
@@ -120,7 +114,7 @@ REQUEST_SPOT_INSTANCES_TEMPLATE = """<RequestSpotInstancesResponse xmlns="http:/
         </PlacementRequestType>
       </launchSpecification>
       <launchGroup>{{ request.launch_group }}</launchGroup>
-      <createTime>YYYY-MM-DDTHH:MM:SS.000Z</createTime>
+      <createTime>2015-01-01T00:00:00.000Z</createTime>
       {% if request.valid_from %}
       <validFrom>{{ request.valid_from }}</validFrom>
       {% endif %}
@@ -144,9 +138,10 @@ DESCRIBE_SPOT_INSTANCES_TEMPLATE = """<DescribeSpotInstanceRequestsResponse xmln
       <state>{{ request.state }}</state>
       <status>
         <code>pending-evaluation</code>
-        <updateTime>YYYY-MM-DDTHH:MM:SS.000Z</updateTime>
+        <updateTime>2015-01-01T00:00:00.000Z</updateTime>
         <message>Your Spot request has been submitted for review, and is pending evaluation.</message>
       </status>
+      <instanceId>{{ request.instance_id }}</instanceId>
       {% if request.availability_zone_group %}
         <availabilityZoneGroup>{{ request.availability_zone_group }}</availabilityZoneGroup>
       {% endif %}
@@ -185,10 +180,20 @@ DESCRIBE_SPOT_INSTANCES_TEMPLATE = """<DescribeSpotInstanceRequestsResponse xmln
           </PlacementRequestType>
         {% endif %}
       </launchSpecification>
+      <tagSet>
+        {% for tag in request.get_tags() %}
+          <item>
+            <resourceId>{{ tag.resource_id }}</resourceId>
+            <resourceType>{{ tag.resource_type }}</resourceType>
+            <key>{{ tag.key }}</key>
+            <value>{{ tag.value }}</value>
+          </item>
+        {% endfor %}
+      </tagSet>
       {% if request.launch_group %}
         <launchGroup>{{ request.launch_group }}</launchGroup>
       {% endif %}
-        <createTime>YYYY-MM-DDTHH:MM:SS.000Z</createTime>
+        <createTime>2015-01-01T00:00:00.000Z</createTime>
       {% if request.valid_from %}
         <validFrom>{{ request.valid_from }}</validFrom>
       {% endif %}

@@ -1,4 +1,8 @@
+from __future__ import unicode_literals
+
 import boto
+import boto3
+from boto3.dynamodb.conditions import Key
 import sure  # noqa
 from freezegun import freeze_time
 from boto.exception import JSONResponseError
@@ -8,6 +12,7 @@ try:
     from boto.dynamodb2.fields import HashKey
     from boto.dynamodb2.table import Table
     from boto.dynamodb2.table import Item
+    from boto.dynamodb2.exceptions import ConditionalCheckFailedException, ItemNotFound
 except ImportError:
     pass
 
@@ -41,7 +46,8 @@ def test_create_table():
             'KeySchema': [
                 {'KeyType': 'HASH', 'AttributeName': 'forum_name'}
             ],
-            'ItemCount': 0, 'CreationDateTime': 1326499200.0
+            'ItemCount': 0, 'CreationDateTime': 1326499200.0,
+            'GlobalSecondaryIndexes': [],
         }
     }
     conn = boto.dynamodb2.connect_to_region(
@@ -129,14 +135,6 @@ def test_item_put_without_table():
             'SentBy': 'User A',
         }
     ).should.throw(JSONResponseError)
-
-
-@requires_boto_gte("2.9")
-@mock_dynamodb2
-def test_get_missing_item():
-    table = create_table()
-
-    table.get_item.when.called_with(test_hash=3241526475).should.throw(JSONResponseError)
 
 
 @requires_boto_gte("2.9")
@@ -367,6 +365,13 @@ def test_get_key_fields():
 
 @requires_boto_gte("2.9")
 @mock_dynamodb2
+def test_get_missing_item():
+    table = create_table()
+    table.get_item.when.called_with(forum_name='missing').should.throw(ItemNotFound)
+
+
+@requires_boto_gte("2.9")
+@mock_dynamodb2
 def test_get_special_item():
     table = Table.create('messages', schema=[
         HashKey('date-joined')
@@ -382,3 +387,143 @@ def test_get_special_item():
     table.put_item(data=data)
     returned_item = table.get_item(**{'date-joined': 127549192})
     dict(returned_item).should.equal(data)
+
+
+@mock_dynamodb2
+def test_update_item_remove():
+    conn = boto.dynamodb2.connect_to_region("us-west-2")
+    table = Table.create('messages', schema=[
+        HashKey('username')
+    ])
+
+    data = {
+        'username': "steve",
+        'SentBy': 'User A',
+        'SentTo': 'User B',
+    }
+    table.put_item(data=data)
+    key_map = {
+        "S": "steve"
+    }
+
+    # Then remove the SentBy field
+    conn.update_item("messages", key_map, update_expression="REMOVE :SentBy, :SentTo")
+
+    returned_item = table.get_item(username="steve")
+    dict(returned_item).should.equal({
+        'username': "steve",
+    })
+
+
+@mock_dynamodb2
+def test_update_item_set():
+    conn = boto.dynamodb2.connect_to_region("us-west-2")
+    table = Table.create('messages', schema=[
+        HashKey('username')
+    ])
+
+    data = {
+        'username': "steve",
+        'SentBy': 'User A',
+    }
+    table.put_item(data=data)
+    key_map = {
+        "S": "steve"
+    }
+
+    conn.update_item("messages", key_map, update_expression="SET foo=:bar, blah=:baz REMOVE :SentBy")
+
+    returned_item = table.get_item(username="steve")
+    dict(returned_item).should.equal({
+        'username': "steve",
+        'foo': 'bar',
+        'blah': 'baz',
+    })
+
+
+@mock_dynamodb2
+def test_failed_overwrite():
+    table = Table.create('messages', schema=[
+        HashKey('id'),
+    ], throughput={
+        'read': 7,
+        'write': 3,
+    })
+
+    data1 = {'id': '123', 'data': '678'}
+    table.put_item(data=data1)
+
+    data2 = {'id': '123', 'data': '345'}
+    table.put_item(data=data2, overwrite=True)
+
+    data3 = {'id': '123', 'data': '812'}
+    table.put_item.when.called_with(data=data3).should.throw(ConditionalCheckFailedException)
+
+    returned_item = table.lookup('123')
+    dict(returned_item).should.equal(data2)
+
+    data4 = {'id': '124', 'data': 812}
+    table.put_item(data=data4)
+
+    returned_item = table.lookup('124')
+    dict(returned_item).should.equal(data4)
+
+
+@mock_dynamodb2
+def test_conflicting_writes():
+    table = Table.create('messages', schema=[
+        HashKey('id'),
+    ])
+
+    item_data = {'id': '123', 'data': '678'}
+    item1 = Item(table, item_data)
+    item2 = Item(table, item_data)
+    item1.save()
+
+    item1['data'] = '579'
+    item2['data'] = '912'
+
+    item1.save()
+    item2.save.when.called_with().should.throw(ConditionalCheckFailedException)
+
+
+"""
+boto3
+"""
+
+
+@mock_dynamodb2
+def test_boto3_conditions():
+    dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
+
+    # Create the DynamoDB table.
+    table = dynamodb.create_table(
+        TableName='users',
+        KeySchema=[
+            {
+                'AttributeName': 'username',
+                'KeyType': 'HASH'
+            },
+        ],
+        AttributeDefinitions=[
+            {
+                'AttributeName': 'username',
+                'AttributeType': 'S'
+            },
+        ],
+        ProvisionedThroughput={
+            'ReadCapacityUnits': 5,
+            'WriteCapacityUnits': 5
+        }
+    )
+    table = dynamodb.Table('users')
+
+    table.put_item(Item={'username': 'johndoe'})
+    table.put_item(Item={'username': 'janedoe'})
+
+    response = table.query(
+        KeyConditionExpression=Key('username').eq('johndoe')
+    )
+    response['Count'].should.equal(1)
+    response['Items'].should.have.length_of(1)
+    response['Items'][0].should.equal({"username": "johndoe"})

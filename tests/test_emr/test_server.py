@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 import sure  # noqa
 
 import moto.server as server
@@ -13,5 +14,5 @@ def test_describe_jobflows():
 
     res = test_client.get('/?Action=DescribeJobFlows')
 
-    res.data.should.contain('<DescribeJobFlowsResult>')
-    res.data.should.contain('<JobFlows>')
+    res.data.should.contain(b'<DescribeJobFlowsResult>')
+    res.data.should.contain(b'<JobFlows>')

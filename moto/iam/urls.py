@@ -1,3 +1,4 @@
+from __future__ import unicode_literals
 from .responses import IamResponse
 
 url_bases = [
@@ -5,5 +6,5 @@ url_bases = [
 ]
 
 url_paths = {
-    '{0}/$': IamResponse().dispatch,
+    '{0}/$': IamResponse.dispatch,
 }

@@ -1,3 +1,6 @@
+from __future__ import unicode_literals, print_function
+
+import six
 import boto
 import sure  # noqa
 import requests
@@ -5,18 +8,20 @@ from moto import mock_dynamodb2
 from moto.dynamodb2 import dynamodb_backend2
 from boto.exception import JSONResponseError
 from tests.helpers import requires_boto_gte
+import tests.backport_assert_raises
+from nose.tools import assert_raises
 try:
     import boto.dynamodb2
 except ImportError:
-    print "This boto version is not supported"
+    print("This boto version is not supported")
 
 @requires_boto_gte("2.9")
 @mock_dynamodb2
 def test_list_tables():
-    name = 'TestTable'    
-    #{'schema': }    
+    name = 'TestTable'
+    #{'schema': }
     dynamodb_backend2.create_table(name,schema=[
-        {u'KeyType': u'HASH', u'AttributeName': u'forum_name'}, 
+        {u'KeyType': u'HASH', u'AttributeName': u'forum_name'},
         {u'KeyType': u'RANGE', u'AttributeName': u'subject'}
     ])
     conn =  boto.dynamodb2.connect_to_region(
@@ -39,7 +44,7 @@ def test_list_tables_layer_1():
         'us-west-2',
         aws_access_key_id="ak",
         aws_secret_access_key="sk")
-    
+
     res = conn.list_tables(limit=1)
     expected = {"TableNames": ["test_1"], "LastEvaluatedTableName": "test_1"}
     res.should.equal(expected)
@@ -56,7 +61,8 @@ def test_describe_missing_table():
         'us-west-2',
         aws_access_key_id="ak",
         aws_secret_access_key="sk")
-    conn.describe_table.when.called_with('messages').should.throw(JSONResponseError)
+    with assert_raises(JSONResponseError):
+        conn.describe_table('messages')
 
 
 @requires_boto_gte("2.9")

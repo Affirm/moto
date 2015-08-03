@@ -1,4 +1,7 @@
+from __future__ import unicode_literals
+
 import functools
+import inspect
 import re
 
 from httpretty import HTTPretty
@@ -9,14 +12,16 @@ from .utils import convert_regex_to_flask_path
 class MockAWS(object):
     nested_count = 0
 
-    def __init__(self, backend):
-        self.backend = backend
+    def __init__(self, backends):
+        self.backends = backends
 
         if self.__class__.nested_count == 0:
             HTTPretty.reset()
 
-    def __call__(self, func):
-        return self.decorate_callable(func)
+    def __call__(self, func, reset=True):
+        if inspect.isclass(func):
+            return self.decorate_class(func)
+        return self.decorate_callable(func, reset)
 
     def __enter__(self):
         self.start()
@@ -24,15 +29,18 @@ class MockAWS(object):
     def __exit__(self, *args):
         self.stop()
 
-    def start(self):
+    def start(self, reset=True):
         self.__class__.nested_count += 1
-        self.backend.reset()
+        if reset:
+            for backend in self.backends.values():
+                backend.reset()
 
         if not HTTPretty.is_enabled():
             HTTPretty.enable()
 
         for method in HTTPretty.METHODS:
-            for key, value in self.backend.urls.iteritems():
+            backend = list(self.backends.values())[0]
+            for key, value in backend.urls.items():
                 HTTPretty.register_uri(
                     method=method,
                     uri=re.compile(key),
@@ -54,22 +62,46 @@ class MockAWS(object):
 
         if self.__class__.nested_count == 0:
             HTTPretty.disable()
+            HTTPretty.reset()
 
-    def decorate_callable(self, func):
+    def decorate_callable(self, func, reset):
         def wrapper(*args, **kwargs):
-            with self:
+            self.start(reset=reset)
+            try:
                 result = func(*args, **kwargs)
+            finally:
+                self.stop()
             return result
         functools.update_wrapper(wrapper, func)
         wrapper.__wrapped__ = func
         return wrapper
+
+    def decorate_class(self, klass):
+        for attr in dir(klass):
+            if attr.startswith("_"):
+                continue
+
+            attr_value = getattr(klass, attr)
+            if not hasattr(attr_value, "__call__"):
+                continue
+
+            # Check if this is a classmethod. If so, skip patching
+            if inspect.ismethod(attr_value) and attr_value.__self__ is klass:
+                continue
+
+            try:
+                setattr(klass, attr, self(attr_value, reset=False))
+            except TypeError:
+                # Sometimes we can't set this for built-in types
+                continue
+        return klass
 
 
 class Model(type):
     def __new__(self, clsname, bases, namespace):
         cls = super(Model, self).__new__(self, clsname, bases, namespace)
         cls.__models__ = {}
-        for name, value in namespace.iteritems():
+        for name, value in namespace.items():
             model = getattr(value, "__returns_model__", False)
             if model is not False:
                 cls.__models__[model] = name
@@ -109,7 +141,7 @@ class BaseBackend(object):
 
         urls = {}
         for url_base in url_bases:
-            for url_path, handler in unformatted_paths.iteritems():
+            for url_path, handler in unformatted_paths.items():
                 url = url_path.format(url_base)
                 urls[url] = handler
 
@@ -124,7 +156,7 @@ class BaseBackend(object):
         unformatted_paths = self._url_module.url_paths
 
         paths = {}
-        for unformatted_path, handler in unformatted_paths.iteritems():
+        for unformatted_path, handler in unformatted_paths.items():
             path = unformatted_path.format("")
             paths[path] = handler
 
@@ -143,7 +175,7 @@ class BaseBackend(object):
         The url paths that will be used for the flask server
         """
         paths = {}
-        for url_path, handler in self.url_paths.iteritems():
+        for url_path, handler in self.url_paths.items():
             url_path = convert_regex_to_flask_path(url_path)
             paths[url_path] = handler
 
@@ -151,6 +183,6 @@ class BaseBackend(object):
 
     def decorator(self, func=None):
         if func:
-            return MockAWS(self)(func)
+            return MockAWS({'global': self})(func)
         else:
-            return MockAWS(self)
+            return MockAWS({'global': self})

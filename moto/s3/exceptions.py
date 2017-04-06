@@ -2,16 +2,25 @@ from __future__ import unicode_literals
 from moto.core.exceptions import RESTError
 
 
-ERROR_WITH_BUCKET_NAME = """{% extends 'error' %}
+ERROR_WITH_BUCKET_NAME = """{% extends 'single_error' %}
 {% block extra %}<BucketName>{{ bucket }}</BucketName>{% endblock %}
+"""
+
+ERROR_WITH_KEY_NAME = """{% extends 'single_error' %}
+{% block extra %}<KeyName>{{ key_name }}</KeyName>{% endblock %}
 """
 
 
 class S3ClientError(RESTError):
-    pass
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('template', 'single_error')
+        self.templates['bucket_error'] = ERROR_WITH_BUCKET_NAME
+        super(S3ClientError, self).__init__(*args, **kwargs)
 
 
 class BucketError(S3ClientError):
+
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('template', 'bucket_error')
         self.templates['bucket_error'] = ERROR_WITH_BUCKET_NAME
@@ -38,6 +47,17 @@ class MissingBucket(BucketError):
             "NoSuchBucket",
             "The specified bucket does not exist",
             *args, **kwargs)
+
+
+class MissingKey(S3ClientError):
+    code = 404
+
+    def __init__(self, key_name):
+        super(MissingKey, self).__init__(
+            "NoSuchKey",
+            "The specified key does not exist.",
+            Key=key_name,
+        )
 
 
 class InvalidPartOrder(S3ClientError):

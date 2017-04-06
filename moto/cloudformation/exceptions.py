@@ -9,22 +9,27 @@ class UnformattedGetAttTemplateException(Exception):
 
 
 class ValidationError(BadRequest):
-    def __init__(self, name_or_id):
+
+    def __init__(self, name_or_id, message=None):
+        if message is None:
+            message = "Stack with id {0} does not exist".format(name_or_id)
+
         template = Template(ERROR_RESPONSE)
         super(ValidationError, self).__init__()
         self.description = template.render(
             code="ValidationError",
-            messgae="Stack:{0} does not exist".format(name_or_id),
+            message=message,
         )
 
 
 class MissingParameterError(BadRequest):
+
     def __init__(self, parameter_name):
         template = Template(ERROR_RESPONSE)
         super(MissingParameterError, self).__init__()
         self.description = template.render(
             code="Missing Parameter",
-            messgae="Missing parameter {0}".format(parameter_name),
+            message="Missing parameter {0}".format(parameter_name),
         )
 
 

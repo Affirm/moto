@@ -11,7 +11,8 @@ class AutoScalingResponse(BaseResponse):
         return autoscaling_backends[self.region]
 
     def create_launch_configuration(self):
-        instance_monitoring_string = self._get_param('InstanceMonitoring.Enabled')
+        instance_monitoring_string = self._get_param(
+            'InstanceMonitoring.Enabled')
         if instance_monitoring_string == 'true':
             instance_monitoring = True
         else:
@@ -20,6 +21,8 @@ class AutoScalingResponse(BaseResponse):
             name=self._get_param('LaunchConfigurationName'),
             image_id=self._get_param('ImageId'),
             key_name=self._get_param('KeyName'),
+            ramdisk_id=self._get_param('RamdiskId'),
+            kernel_id=self._get_param('KernelId'),
             security_groups=self._get_multi_param('SecurityGroups.member'),
             user_data=self._get_param('UserData'),
             instance_type=self._get_param('InstanceType'),
@@ -27,28 +30,35 @@ class AutoScalingResponse(BaseResponse):
             instance_profile_name=self._get_param('IamInstanceProfile'),
             spot_price=self._get_param('SpotPrice'),
             ebs_optimized=self._get_param('EbsOptimized'),
-            associate_public_ip_address=self._get_param("AssociatePublicIpAddress"),
-            block_device_mappings=self._get_list_prefix('BlockDeviceMappings.member')
+            associate_public_ip_address=self._get_param(
+                "AssociatePublicIpAddress"),
+            block_device_mappings=self._get_list_prefix(
+                'BlockDeviceMappings.member')
         )
         template = self.response_template(CREATE_LAUNCH_CONFIGURATION_TEMPLATE)
         return template.render()
 
     def describe_launch_configurations(self):
         names = self._get_multi_param('LaunchConfigurationNames.member')
-        launch_configurations = self.autoscaling_backend.describe_launch_configurations(names)
-        template = self.response_template(DESCRIBE_LAUNCH_CONFIGURATIONS_TEMPLATE)
+        launch_configurations = self.autoscaling_backend.describe_launch_configurations(
+            names)
+        template = self.response_template(
+            DESCRIBE_LAUNCH_CONFIGURATIONS_TEMPLATE)
         return template.render(launch_configurations=launch_configurations)
 
     def delete_launch_configuration(self):
-        launch_configurations_name = self.querystring.get('LaunchConfigurationName')[0]
-        self.autoscaling_backend.delete_launch_configuration(launch_configurations_name)
+        launch_configurations_name = self.querystring.get(
+            'LaunchConfigurationName')[0]
+        self.autoscaling_backend.delete_launch_configuration(
+            launch_configurations_name)
         template = self.response_template(DELETE_LAUNCH_CONFIGURATION_TEMPLATE)
         return template.render()
 
     def create_auto_scaling_group(self):
         self.autoscaling_backend.create_autoscaling_group(
             name=self._get_param('AutoScalingGroupName'),
-            availability_zones=self._get_multi_param('AvailabilityZones.member'),
+            availability_zones=self._get_multi_param(
+                'AvailabilityZones.member'),
             desired_capacity=self._get_int_param('DesiredCapacity'),
             max_size=self._get_int_param('MaxSize'),
             min_size=self._get_int_param('MinSize'),
@@ -59,7 +69,9 @@ class AutoScalingResponse(BaseResponse):
             health_check_type=self._get_param('HealthCheckType'),
             load_balancers=self._get_multi_param('LoadBalancerNames.member'),
             placement_group=self._get_param('PlacementGroup'),
-            termination_policies=self._get_multi_param('TerminationPolicies.member'),
+            termination_policies=self._get_multi_param(
+                'TerminationPolicies.member'),
+            tags=self._get_list_prefix('Tags.member'),
         )
         template = self.response_template(CREATE_AUTOSCALING_GROUP_TEMPLATE)
         return template.render()
@@ -73,7 +85,8 @@ class AutoScalingResponse(BaseResponse):
     def update_auto_scaling_group(self):
         self.autoscaling_backend.update_autoscaling_group(
             name=self._get_param('AutoScalingGroupName'),
-            availability_zones=self._get_multi_param('AvailabilityZones.member'),
+            availability_zones=self._get_multi_param(
+                'AvailabilityZones.member'),
             desired_capacity=self._get_int_param('DesiredCapacity'),
             max_size=self._get_int_param('MaxSize'),
             min_size=self._get_int_param('MinSize'),
@@ -84,7 +97,8 @@ class AutoScalingResponse(BaseResponse):
             health_check_type=self._get_param('HealthCheckType'),
             load_balancers=self._get_multi_param('LoadBalancerNames.member'),
             placement_group=self._get_param('PlacementGroup'),
-            termination_policies=self._get_multi_param('TerminationPolicies.member'),
+            termination_policies=self._get_multi_param(
+                'TerminationPolicies.member'),
         )
         template = self.response_template(UPDATE_AUTOSCALING_GROUP_TEMPLATE)
         return template.render()
@@ -98,18 +112,28 @@ class AutoScalingResponse(BaseResponse):
     def set_desired_capacity(self):
         group_name = self._get_param('AutoScalingGroupName')
         desired_capacity = self._get_int_param('DesiredCapacity')
-        self.autoscaling_backend.set_desired_capacity(group_name, desired_capacity)
+        self.autoscaling_backend.set_desired_capacity(
+            group_name, desired_capacity)
         template = self.response_template(SET_DESIRED_CAPACITY_TEMPLATE)
+        return template.render()
+
+    def create_or_update_tags(self):
+        tags = self._get_list_prefix('Tags.member')
+
+        self.autoscaling_backend.create_or_update_tags(tags)
+        template = self.response_template(UPDATE_AUTOSCALING_GROUP_TEMPLATE)
         return template.render()
 
     def describe_auto_scaling_instances(self):
         instance_states = self.autoscaling_backend.describe_autoscaling_instances()
-        template = self.response_template(DESCRIBE_AUTOSCALING_INSTANCES_TEMPLATE)
+        template = self.response_template(
+            DESCRIBE_AUTOSCALING_INSTANCES_TEMPLATE)
         return template.render(instance_states=instance_states)
 
     def put_scaling_policy(self):
         policy = self.autoscaling_backend.create_autoscaling_policy(
             name=self._get_param('PolicyName'),
+            policy_type=self._get_param('PolicyType'),
             adjustment_type=self._get_param('AdjustmentType'),
             as_name=self._get_param('AutoScalingGroupName'),
             scaling_adjustment=self._get_int_param('ScalingAdjustment'),
@@ -119,7 +143,10 @@ class AutoScalingResponse(BaseResponse):
         return template.render(policy=policy)
 
     def describe_policies(self):
-        policies = self.autoscaling_backend.describe_policies()
+        policies = self.autoscaling_backend.describe_policies(
+            autoscaling_group_name=self._get_param('AutoScalingGroupName'),
+            policy_names=self._get_multi_param('PolicyNames.member'),
+            policy_types=self._get_multi_param('PolicyTypes.member'))
         template = self.response_template(DESCRIBE_SCALING_POLICIES_TEMPLATE)
         return template.render(policies=policies)
 
@@ -154,7 +181,7 @@ DESCRIBE_LAUNCH_CONFIGURATIONS_TEMPLATE = """<DescribeLaunchConfigurationsRespon
             {% endfor %}
           </SecurityGroups>
           <CreatedTime>2013-01-21T23:04:42.200Z</CreatedTime>
-          <KernelId/>
+          <KernelId>{{ launch_configuration.kernel_id }}</KernelId>
           {% if launch_configuration.instance_profile_name %}
             <IamInstanceProfile>{{ launch_configuration.instance_profile_name }}</IamInstanceProfile>
           {% endif %}
@@ -201,7 +228,7 @@ DESCRIBE_LAUNCH_CONFIGURATIONS_TEMPLATE = """<DescribeLaunchConfigurationsRespon
           {% else %}
             <KeyName/>
           {% endif %}
-          <RamdiskId/>
+          <RamdiskId>{{ launch_configuration.ramdisk_id }}</RamdiskId>
           <EbsOptimized>{{ launch_configuration.ebs_optimized }}</EbsOptimized>
           <InstanceMonitoring>
             <Enabled>{{ launch_configuration.instance_monitoring_enabled }}</Enabled>
@@ -235,7 +262,17 @@ DESCRIBE_AUTOSCALING_GROUPS_TEMPLATE = """<DescribeAutoScalingGroupsResponse xml
     <AutoScalingGroups>
       {% for group in groups %}
       <member>
-        <Tags/>
+        <Tags>
+          {% for tag in group.tags %}
+          <member>
+            <ResourceType>{{ tag.resource_type or tag.ResourceType }}</ResourceType>
+            <ResourceId>{{ tag.resource_id or tag.ResourceId }}</ResourceId>
+            <PropagateAtLaunch>{{ tag.propagate_at_launch or tag.PropagateAtLaunch }}</PropagateAtLaunch>
+            <Key>{{ tag.key or tag.Key }}</Key>
+            <Value>{{ tag.value or tag.Value }}</Value>
+          </member>
+          {% endfor %}
+        </Tags>
         <SuspendedProcesses/>
         <AutoScalingGroupName>{{ group.name }}</AutoScalingGroupName>
         <HealthCheckType>{{ group.health_check_type }}</HealthCheckType>
@@ -353,6 +390,7 @@ DESCRIBE_SCALING_POLICIES_TEMPLATE = """<DescribePoliciesResponse xmlns="http://
         <AdjustmentType>{{ policy.adjustment_type }}</AdjustmentType>
         <ScalingAdjustment>{{ policy.scaling_adjustment }}</ScalingAdjustment>
         <PolicyName>{{ policy.name }}</PolicyName>
+        <PolicyType>{{ policy.policy_type }}</PolicyType>
         <AutoScalingGroupName>{{ policy.as_name }}</AutoScalingGroupName>
         <Cooldown>{{ policy.cooldown }}</Cooldown>
         <Alarms/>

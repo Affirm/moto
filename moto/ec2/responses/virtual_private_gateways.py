@@ -4,6 +4,7 @@ from moto.ec2.utils import filters_from_querystring
 
 
 class VirtualPrivateGateways(BaseResponse):
+
     def attach_vpn_gateway(self):
         vpn_gateway_id = self.querystring.get('VpnGatewayId')[0]
         vpc_id = self.querystring.get('VpcId')[0]
@@ -42,8 +43,9 @@ class VirtualPrivateGateways(BaseResponse):
         template = self.response_template(DETACH_VPN_GATEWAY_RESPONSE)
         return template.render(attachment=attachment)
 
+
 CREATE_VPN_GATEWAY_RESPONSE = """
-<CreateVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<CreateVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <vpnGateway>
     <vpnGatewayId>{{ vpn_gateway.id }}</vpnGatewayId>
@@ -65,7 +67,7 @@ CREATE_VPN_GATEWAY_RESPONSE = """
 </CreateVpnGatewayResponse>"""
 
 DESCRIBE_VPN_GATEWAYS_RESPONSE = """
-<DescribeVpnGatewaysResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<DescribeVpnGatewaysResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <vpnGatewaySet>
     {% for vpn_gateway in vpn_gateways %}
@@ -99,7 +101,7 @@ DESCRIBE_VPN_GATEWAYS_RESPONSE = """
 </DescribeVpnGatewaysResponse>"""
 
 ATTACH_VPN_GATEWAY_RESPONSE = """
-<AttachVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<AttachVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
    <attachment>
       <vpcId>{{ attachment.vpc_id }}</vpcId>
@@ -108,14 +110,14 @@ ATTACH_VPN_GATEWAY_RESPONSE = """
 </AttachVpnGatewayResponse>"""
 
 DELETE_VPN_GATEWAY_RESPONSE = """
-<DeleteVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<DeleteVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
    <return>true</return>
 </DeleteVpnGatewayResponse>
 """
 
 DETACH_VPN_GATEWAY_RESPONSE = """
-<DetachVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<DetachVpnGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
    <return>true</return>
 </DetachVpnGatewayResponse>

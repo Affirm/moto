@@ -4,7 +4,7 @@ import six
 import boto
 import sure  # noqa
 import requests
-from moto import mock_dynamodb2
+from moto import mock_dynamodb2, mock_dynamodb2_deprecated
 from moto.dynamodb2 import dynamodb_backend2
 from boto.exception import JSONResponseError
 from tests.helpers import requires_boto_gte
@@ -15,32 +15,33 @@ try:
 except ImportError:
     print("This boto version is not supported")
 
+
 @requires_boto_gte("2.9")
-@mock_dynamodb2
+@mock_dynamodb2_deprecated
 def test_list_tables():
     name = 'TestTable'
     #{'schema': }
-    dynamodb_backend2.create_table(name,schema=[
+    dynamodb_backend2.create_table(name, schema=[
         {u'KeyType': u'HASH', u'AttributeName': u'forum_name'},
         {u'KeyType': u'RANGE', u'AttributeName': u'subject'}
     ])
-    conn =  boto.dynamodb2.connect_to_region(
-            'us-west-2',
+    conn = boto.dynamodb2.connect_to_region(
+        'us-west-2',
         aws_access_key_id="ak",
         aws_secret_access_key="sk")
     assert conn.list_tables()["TableNames"] == [name]
 
 
 @requires_boto_gte("2.9")
-@mock_dynamodb2
+@mock_dynamodb2_deprecated
 def test_list_tables_layer_1():
-    dynamodb_backend2.create_table("test_1",schema=[
+    dynamodb_backend2.create_table("test_1", schema=[
         {u'KeyType': u'HASH', u'AttributeName': u'name'}
     ])
-    dynamodb_backend2.create_table("test_2",schema=[
+    dynamodb_backend2.create_table("test_2", schema=[
         {u'KeyType': u'HASH', u'AttributeName': u'name'}
     ])
-    conn =  boto.dynamodb2.connect_to_region(
+    conn = boto.dynamodb2.connect_to_region(
         'us-west-2',
         aws_access_key_id="ak",
         aws_secret_access_key="sk")
@@ -55,19 +56,11 @@ def test_list_tables_layer_1():
 
 
 @requires_boto_gte("2.9")
-@mock_dynamodb2
+@mock_dynamodb2_deprecated
 def test_describe_missing_table():
-    conn =  boto.dynamodb2.connect_to_region(
+    conn = boto.dynamodb2.connect_to_region(
         'us-west-2',
         aws_access_key_id="ak",
         aws_secret_access_key="sk")
     with assert_raises(JSONResponseError):
         conn.describe_table('messages')
-
-
-@requires_boto_gte("2.9")
-@mock_dynamodb2
-def test_sts_handler():
-    res = requests.post("https://sts.amazonaws.com/", data={"GetSessionToken": ""})
-    res.ok.should.be.ok
-    res.text.should.contain("SecretAccessKey")

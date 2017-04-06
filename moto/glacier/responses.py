@@ -11,6 +11,7 @@ from .utils import region_from_glacier_url, vault_from_glacier_url
 class GlacierResponse(_TemplateEnvironmentMixin):
 
     def __init__(self, backend):
+        super(GlacierResponse, self).__init__()
         self.backend = backend
 
     @classmethod
@@ -127,7 +128,8 @@ class GlacierResponse(_TemplateEnvironmentMixin):
             archive_id = json_body['ArchiveId']
             job_id = self.backend.initiate_job(vault_name, archive_id)
             headers['x-amz-job-id'] = job_id
-            headers['Location'] = "/{0}/vaults/{1}/jobs/{2}".format(account_id, vault_name, job_id)
+            headers[
+                'Location'] = "/{0}/vaults/{1}/jobs/{2}".format(account_id, vault_name, job_id)
             return 202, headers, ""
 
     @classmethod

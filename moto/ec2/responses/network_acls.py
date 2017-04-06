@@ -45,7 +45,8 @@ class NetworkACLs(BaseResponse):
     def describe_network_acls(self):
         network_acl_ids = network_acl_ids_from_querystring(self.querystring)
         filters = filters_from_querystring(self.querystring)
-        network_acls = self.ec2_backend.get_all_network_acls(network_acl_ids, filters)
+        network_acls = self.ec2_backend.get_all_network_acls(
+            network_acl_ids, filters)
         template = self.response_template(DESCRIBE_NETWORK_ACL_RESPONSE)
         return template.render(network_acls=network_acls)
 
@@ -66,7 +67,7 @@ class NetworkACLs(BaseResponse):
 
 
 CREATE_NETWORK_ACL_RESPONSE = """
-<CreateNetworkAclResponse xmlns="http://ec2.amazonaws.com/doc/2014-09-01/">
+<CreateNetworkAclResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <networkAcl>
       <networkAclId>{{ network_acl.id }}</networkAclId>
@@ -89,14 +90,14 @@ CREATE_NETWORK_ACL_RESPONSE = """
 """
 
 DESCRIBE_NETWORK_ACL_RESPONSE = """
-<DescribeNetworkAclsResponse xmlns="http://ec2.amazonaws.com/doc/2014-09-01/">
+<DescribeNetworkAclsResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <networkAclSet>
    {% for network_acl in network_acls %}
    <item>
      <networkAclId>{{ network_acl.id }}</networkAclId>
      <vpcId>{{ network_acl.vpc_id }}</vpcId>
-     <default>true</default>
+     <default>{{ network_acl.default }}</default>
      <entrySet>
        {% for entry in network_acl.network_acl_entries %}
          <item>
@@ -140,21 +141,21 @@ DESCRIBE_NETWORK_ACL_RESPONSE = """
 """
 
 CREATE_NETWORK_ACL_ENTRY_RESPONSE = """
-<CreateNetworkAclEntryResponse xmlns="http://ec2.amazonaws.com/doc/2014-09-01/">
+<CreateNetworkAclEntryResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </CreateNetworkAclEntryResponse>
 """
 
 REPLACE_NETWORK_ACL_ASSOCIATION = """
-<ReplaceNetworkAclAssociationResponse xmlns="http://ec2.amazonaws.com/doc/2014-09-01/">
+<ReplaceNetworkAclAssociationResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <newAssociationId>{{ association.new_association_id }}</newAssociationId>
 </ReplaceNetworkAclAssociationResponse>
 """
 
 DELETE_NETWORK_ACL_ASSOCIATION = """
-<DeleteNetworkAclResponse xmlns="http://ec2.amazonaws.com/doc/2014-10-01/">
+<DeleteNetworkAclResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </DeleteNetworkAclResponse>

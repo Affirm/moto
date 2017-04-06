@@ -1,36 +1,47 @@
-from moto.core import BaseBackend
+from moto.core import BaseBackend, BaseModel
+import boto.ec2.cloudwatch
+import datetime
 
 
 class Dimension(object):
+
     def __init__(self, name, value):
         self.name = name
         self.value = value
 
 
-class FakeAlarm(object):
-    def __init__(self, name, comparison_operator, evaluation_periods, period,
-                 threshold, statistic, description, dimensions, alarm_actions,
+class FakeAlarm(BaseModel):
+
+    def __init__(self, name, namespace, metric_name, comparison_operator, evaluation_periods,
+                 period, threshold, statistic, description, dimensions, alarm_actions,
                  ok_actions, insufficient_data_actions, unit):
         self.name = name
+        self.namespace = namespace
+        self.metric_name = metric_name
         self.comparison_operator = comparison_operator
         self.evaluation_periods = evaluation_periods
         self.period = period
         self.threshold = threshold
         self.statistic = statistic
         self.description = description
-        self.dimensions = [Dimension(dimension['name'], dimension['value']) for dimension in dimensions]
+        self.dimensions = [Dimension(dimension['name'], dimension[
+                                     'value']) for dimension in dimensions]
         self.alarm_actions = alarm_actions
         self.ok_actions = ok_actions
         self.insufficient_data_actions = insufficient_data_actions
         self.unit = unit
+        self.state_updated_timestamp = datetime.datetime.utcnow()
+        self.configuration_updated_timestamp = datetime.datetime.utcnow()
 
 
-class MetricDatum(object):
+class MetricDatum(BaseModel):
+
     def __init__(self, namespace, name, value, dimensions):
         self.namespace = namespace
         self.name = name
         self.value = value
-        self.dimensions = [Dimension(dimension['name'], dimension['value']) for dimension in dimensions]
+        self.dimensions = [Dimension(dimension['name'], dimension[
+                                     'value']) for dimension in dimensions]
 
 
 class CloudWatchBackend(BaseBackend):
@@ -39,10 +50,10 @@ class CloudWatchBackend(BaseBackend):
         self.alarms = {}
         self.metric_data = []
 
-    def put_metric_alarm(self, name, comparison_operator, evaluation_periods,
+    def put_metric_alarm(self, name, namespace, metric_name, comparison_operator, evaluation_periods,
                          period, threshold, statistic, description, dimensions,
                          alarm_actions, ok_actions, insufficient_data_actions, unit):
-        alarm = FakeAlarm(name, comparison_operator, evaluation_periods, period,
+        alarm = FakeAlarm(name, namespace, metric_name, comparison_operator, evaluation_periods, period,
                           threshold, statistic, description, dimensions, alarm_actions,
                           ok_actions, insufficient_data_actions, unit)
         self.alarms[name] = alarm
@@ -93,10 +104,13 @@ class CloudWatchBackend(BaseBackend):
 
     def put_metric_data(self, namespace, metric_data):
         for name, value, dimensions in metric_data:
-            self.metric_data.append(MetricDatum(namespace, name, value, dimensions))
+            self.metric_data.append(MetricDatum(
+                namespace, name, value, dimensions))
 
     def get_all_metrics(self):
         return self.metric_data
 
 
-cloudwatch_backend = CloudWatchBackend()
+cloudwatch_backends = {}
+for region in boto.ec2.cloudwatch.regions():
+    cloudwatch_backends[region.name] = CloudWatchBackend()

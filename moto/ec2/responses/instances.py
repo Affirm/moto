@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+from boto.ec2.instancetype import InstanceType
 from moto.core.responses import BaseResponse
 from moto.core.utils import camelcase_to_underscores
 from moto.ec2.utils import instance_ids_from_querystring, filters_from_querystring, \
@@ -6,13 +7,16 @@ from moto.ec2.utils import instance_ids_from_querystring, filters_from_querystri
 
 
 class InstanceResponse(BaseResponse):
+
     def describe_instances(self):
         filter_dict = filters_from_querystring(self.querystring)
         instance_ids = instance_ids_from_querystring(self.querystring)
         if instance_ids:
-            reservations = self.ec2_backend.get_reservations_by_instance_ids(instance_ids, filters=filter_dict)
+            reservations = self.ec2_backend.get_reservations_by_instance_ids(
+                instance_ids, filters=filter_dict)
         else:
-            reservations = self.ec2_backend.all_reservations(make_copy=True, filters=filter_dict)
+            reservations = self.ec2_backend.all_reservations(
+                make_copy=True, filters=filter_dict)
 
         template = self.response_template(EC2_DESCRIBE_INSTANCES)
         return template.render(reservations=reservations)
@@ -25,51 +29,60 @@ class InstanceResponse(BaseResponse):
         security_group_ids = self._get_multi_param('SecurityGroupId')
         nics = dict_from_querystring("NetworkInterface", self.querystring)
         instance_type = self.querystring.get("InstanceType", ["m1.small"])[0]
+        placement = self.querystring.get(
+            "Placement.AvailabilityZone", [None])[0]
         subnet_id = self.querystring.get("SubnetId", [None])[0]
         private_ip = self.querystring.get("PrivateIpAddress", [None])[0]
-        associate_public_ip = self.querystring.get("AssociatePublicIpAddress", [None])[0]
+        associate_public_ip = self.querystring.get(
+            "AssociatePublicIpAddress", [None])[0]
         key_name = self.querystring.get("KeyName", [None])[0]
 
-        new_reservation = self.ec2_backend.add_instances(
-            image_id, min_count, user_data, security_group_names,
-            instance_type=instance_type, subnet_id=subnet_id,
-            key_name=key_name, security_group_ids=security_group_ids,
-            nics=nics, private_ip=private_ip, associate_public_ip=associate_public_ip)
+        if self.is_not_dryrun('RunInstance'):
+            new_reservation = self.ec2_backend.add_instances(
+                image_id, min_count, user_data, security_group_names,
+                instance_type=instance_type, placement=placement, subnet_id=subnet_id,
+                key_name=key_name, security_group_ids=security_group_ids,
+                nics=nics, private_ip=private_ip, associate_public_ip=associate_public_ip)
 
-        template = self.response_template(EC2_RUN_INSTANCES)
-        return template.render(reservation=new_reservation)
+            template = self.response_template(EC2_RUN_INSTANCES)
+            return template.render(reservation=new_reservation)
 
     def terminate_instances(self):
         instance_ids = instance_ids_from_querystring(self.querystring)
-        instances = self.ec2_backend.terminate_instances(instance_ids)
-        template = self.response_template(EC2_TERMINATE_INSTANCES)
-        return template.render(instances=instances)
+        if self.is_not_dryrun('TerminateInstance'):
+            instances = self.ec2_backend.terminate_instances(instance_ids)
+            template = self.response_template(EC2_TERMINATE_INSTANCES)
+            return template.render(instances=instances)
 
     def reboot_instances(self):
         instance_ids = instance_ids_from_querystring(self.querystring)
-        instances = self.ec2_backend.reboot_instances(instance_ids)
-        template = self.response_template(EC2_REBOOT_INSTANCES)
-        return template.render(instances=instances)
+        if self.is_not_dryrun('RebootInstance'):
+            instances = self.ec2_backend.reboot_instances(instance_ids)
+            template = self.response_template(EC2_REBOOT_INSTANCES)
+            return template.render(instances=instances)
 
     def stop_instances(self):
         instance_ids = instance_ids_from_querystring(self.querystring)
-        instances = self.ec2_backend.stop_instances(instance_ids)
-        template = self.response_template(EC2_STOP_INSTANCES)
-        return template.render(instances=instances)
+        if self.is_not_dryrun('StopInstance'):
+            instances = self.ec2_backend.stop_instances(instance_ids)
+            template = self.response_template(EC2_STOP_INSTANCES)
+            return template.render(instances=instances)
 
     def start_instances(self):
         instance_ids = instance_ids_from_querystring(self.querystring)
-        instances = self.ec2_backend.start_instances(instance_ids)
-        template = self.response_template(EC2_START_INSTANCES)
-        return template.render(instances=instances)
+        if self.is_not_dryrun('StartInstance'):
+            instances = self.ec2_backend.start_instances(instance_ids)
+            template = self.response_template(EC2_START_INSTANCES)
+            return template.render(instances=instances)
 
     def describe_instance_status(self):
         instance_ids = instance_ids_from_querystring(self.querystring)
         include_all_instances = optional_from_querystring('IncludeAllInstances',
-                                                        self.querystring) == 'true'
+                                                          self.querystring) == 'true'
 
         if instance_ids:
-            instances = self.ec2_backend.get_multi_instances_by_id(instance_ids)
+            instances = self.ec2_backend.get_multi_instances_by_id(
+                instance_ids)
         elif include_all_instances:
             instances = self.ec2_backend.all_instances()
         else:
@@ -78,6 +91,12 @@ class InstanceResponse(BaseResponse):
         template = self.response_template(EC2_INSTANCE_STATUS)
         return template.render(instances=instances)
 
+    def describe_instance_types(self):
+        instance_types = [InstanceType(
+            name='t1.micro', cores=1, memory=644874240, disk=0)]
+        template = self.response_template(EC2_DESCRIBE_INSTANCE_TYPES)
+        return template.render(instance_types=instance_types)
+
     def describe_instance_attribute(self):
         # TODO this and modify below should raise IncorrectInstanceState if
         # instance not in stopped state
@@ -85,10 +104,12 @@ class InstanceResponse(BaseResponse):
         key = camelcase_to_underscores(attribute)
         instance_ids = instance_ids_from_querystring(self.querystring)
         instance_id = instance_ids[0]
-        instance, value = self.ec2_backend.describe_instance_attribute(instance_id, key)
+        instance, value = self.ec2_backend.describe_instance_attribute(
+            instance_id, key)
 
         if key == "group_set":
-            template = self.response_template(EC2_DESCRIBE_INSTANCE_GROUPSET_ATTRIBUTE)
+            template = self.response_template(
+                EC2_DESCRIBE_INSTANCE_GROUPSET_ATTRIBUTE)
         else:
             template = self.response_template(EC2_DESCRIBE_INSTANCE_ATTRIBUTE)
 
@@ -126,7 +147,6 @@ class InstanceResponse(BaseResponse):
         mapping_counter = 1
         mapping_device_name_fmt = 'BlockDeviceMapping.%s.DeviceName'
         mapping_del_on_term_fmt = 'BlockDeviceMapping.%s.Ebs.DeleteOnTermination'
-
         while True:
             mapping_device_name = mapping_device_name_fmt % mapping_counter
             if mapping_device_name not in self.querystring.keys():
@@ -141,8 +161,10 @@ class InstanceResponse(BaseResponse):
             instance_id = instance_ids[0]
             instance = self.ec2_backend.get_instance(instance_id)
 
-            block_device_type = instance.block_device_mapping[device_name_value]
-            block_device_type.delete_on_termination = del_on_term_value
+            if self.is_not_dryrun('ModifyInstanceAttribute'):
+                block_device_type = instance.block_device_mapping[
+                    device_name_value]
+                block_device_type.delete_on_termination = del_on_term_value
 
             # +1 for the next device
             mapping_counter += 1
@@ -160,12 +182,15 @@ class InstanceResponse(BaseResponse):
         if not attribute_key:
             return
 
-        value = self.querystring.get(attribute_key)[0]
-        normalized_attribute = camelcase_to_underscores(attribute_key.split(".")[0])
-        instance_ids = instance_ids_from_querystring(self.querystring)
-        instance_id = instance_ids[0]
-        self.ec2_backend.modify_instance_attribute(instance_id, normalized_attribute, value)
-        return EC2_MODIFY_INSTANCE_ATTRIBUTE
+        if self.is_not_dryrun('Modify' + attribute_key.split(".")[0]):
+            value = self.querystring.get(attribute_key)[0]
+            normalized_attribute = camelcase_to_underscores(
+                attribute_key.split(".")[0])
+            instance_ids = instance_ids_from_querystring(self.querystring)
+            instance_id = instance_ids[0]
+            self.ec2_backend.modify_instance_attribute(
+                instance_id, normalized_attribute, value)
+            return EC2_MODIFY_INSTANCE_ATTRIBUTE
 
     def _security_grp_instance_attribute_handler(self):
         new_security_grp_list = []
@@ -175,14 +200,16 @@ class InstanceResponse(BaseResponse):
 
         instance_ids = instance_ids_from_querystring(self.querystring)
         instance_id = instance_ids[0]
-        self.ec2_backend.modify_instance_security_groups(instance_id, new_security_grp_list)
-        return EC2_MODIFY_INSTANCE_ATTRIBUTE
+        if self.is_not_dryrun('ModifyInstanceSecurityGroups'):
+            self.ec2_backend.modify_instance_security_groups(
+                instance_id, new_security_grp_list)
+            return EC2_MODIFY_INSTANCE_ATTRIBUTE
 
 
-EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <reservationId>{{ reservation.id }}</reservationId>
-  <ownerId>111122223333</ownerId>
+  <ownerId>123456789012</ownerId>
   <groupSet>
     <item>
       <groupId>sg-245f6a01</groupId>
@@ -197,9 +224,10 @@ EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc
           <instanceState>
             <code>0</code>
             <name>pending</name>
-          </instanceState>
+         </instanceState>
           <privateDnsName>{{ instance.private_dns }}</privateDnsName>
           <publicDnsName>{{ instance.public_dns }}</publicDnsName>
+          <dnsName>{{ instance.public_dns }}</dnsName>
           <reason/>
           <keyName>{{ instance.key_name }}</keyName>
           <amiLaunchIndex>0</amiLaunchIndex>
@@ -252,7 +280,7 @@ EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc
                   <vpcId>{{ nic.subnet.vpc_id }}</vpcId>
                 {% endif %}
                 <description>Primary network interface</description>
-                <ownerId>111122223333</ownerId>
+                <ownerId>123456789012</ownerId>
                 <status>in-use</status>
                 <macAddress>1b:2b:3c:4d:5e:6f</macAddress>
                 <privateIpAddress>{{ nic.private_ip_address }}</privateIpAddress>
@@ -269,13 +297,13 @@ EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc
                   <attachmentId>{{ nic.attachment_id }}</attachmentId>
                   <deviceIndex>{{ nic.device_index }}</deviceIndex>
                   <status>attached</status>
-                  <attachTime>2015-01-01T00:00:00+0000</attachTime>
+                  <attachTime>2015-01-01T00:00:00Z</attachTime>
                   <deleteOnTermination>true</deleteOnTermination>
                 </attachment>
                 {% if nic.public_ip %}
                   <association>
                     <publicIp>{{ nic.public_ip }}</publicIp>
-                    <ipOwnerId>111122223333</ipOwnerId>
+                    <ipOwnerId>123456789012</ipOwnerId>
                   </association>
                 {% endif %}
                 <privateIpAddressesSet>
@@ -285,7 +313,7 @@ EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc
                     {% if nic.public_ip %}
                       <association>
                         <publicIp>{{ nic.public_ip }}</publicIp>
-                        <ipOwnerId>111122223333</ipOwnerId>
+                        <ipOwnerId>123456789012</ipOwnerId>
                       </association>
                     {% endif %}
                   </item>
@@ -298,18 +326,22 @@ EC2_RUN_INSTANCES = """<RunInstancesResponse xmlns="http://ec2.amazonaws.com/doc
   </instancesSet>
   </RunInstancesResponse>"""
 
-EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazonaws.com/doc/2012-12-01/'>
+EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>fdcdcab1-ae5c-489e-9c33-4637c5dda355</requestId>
       <reservationSet>
         {% for reservation in reservations %}
           <item>
             <reservationId>{{ reservation.id }}</reservationId>
-            <ownerId>111122223333</ownerId>
+            <ownerId>123456789012</ownerId>
             <groupSet>
               {% for group in reservation.dynamic_group_list %}
               <item>
+      {% if group.id %}
                 <groupId>{{ group.id }}</groupId>
                 <groupName>{{ group.name }}</groupName>
+                {% else %}
+                <groupId>{{ group }}</groupId>
+                {% endif %}
               </item>
               {% endfor %}
             </groupSet>
@@ -324,6 +356,7 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                     </instanceState>
                     <privateDnsName>{{ instance.private_dns }}</privateDnsName>
                     <publicDnsName>{{ instance.public_dns }}</publicDnsName>
+                    <dnsName>{{ instance.public_dns }}</dnsName>
                     <reason>{{ instance._reason }}</reason>
                     <keyName>{{ instance.key_name }}</keyName>
                     <amiLaunchIndex>0</amiLaunchIndex>
@@ -355,8 +388,12 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                     <groupSet>
                       {% for group in instance.dynamic_group_list %}
                       <item>
-                        <groupId>{{ group.id }}</groupId>
-                        <groupName>{{ group.name }}</groupName>
+              {% if group.id %}
+              <groupId>{{ group.id }}</groupId>
+              <groupName>{{ group.name }}</groupName>
+              {% else %}
+              <groupId>{{ group }}</groupId>
+              {% endif %}
                       </item>
                       {% endfor %}
                     </groupSet>
@@ -380,7 +417,7 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                              <size>{{deviceobject.size}}</size>
                         </ebs>
                       </item>
-			            {% endfor %}
+                     {% endfor %}
                     </blockDeviceMapping>
                     <virtualizationType>{{ instance.virtualization_type }}</virtualizationType>
                     <clientToken>ABCDE1234567890123</clientToken>
@@ -404,7 +441,7 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                             <vpcId>{{ nic.subnet.vpc_id }}</vpcId>
                           {% endif %}
                           <description>Primary network interface</description>
-                          <ownerId>111122223333</ownerId>
+                          <ownerId>123456789012</ownerId>
                           <status>in-use</status>
                           <macAddress>1b:2b:3c:4d:5e:6f</macAddress>
                           <privateIpAddress>{{ nic.private_ip_address }}</privateIpAddress>
@@ -412,8 +449,12 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                           <groupSet>
                             {% for group in nic.group_set %}
                             <item>
-                              <groupId>{{ group.id }}</groupId>
-                              <groupName>{{ group.name }}</groupName>
+               {% if group.id %}
+               <groupId>{{ group.id }}</groupId>
+               <groupName>{{ group.name }}</groupName>
+               {% else %}
+               <groupId>{{ group }}</groupId>
+               {% endif %}
                             </item>
                             {% endfor %}
                           </groupSet>
@@ -421,13 +462,13 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                             <attachmentId>{{ nic.attachment_id }}</attachmentId>
                             <deviceIndex>{{ nic.device_index }}</deviceIndex>
                             <status>attached</status>
-                            <attachTime>2015-01-01T00:00:00+0000</attachTime>
+                            <attachTime>2015-01-01T00:00:00Z</attachTime>
                             <deleteOnTermination>true</deleteOnTermination>
                           </attachment>
                           {% if nic.public_ip %}
                             <association>
                               <publicIp>{{ nic.public_ip }}</publicIp>
-                              <ipOwnerId>111122223333</ipOwnerId>
+                              <ipOwnerId>123456789012</ipOwnerId>
                             </association>
                           {% endif %}
                           <privateIpAddressesSet>
@@ -437,7 +478,7 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
                               {% if nic.public_ip %}
                                 <association>
                                   <publicIp>{{ nic.public_ip }}</publicIp>
-                                  <ipOwnerId>111122223333</ipOwnerId>
+                                  <ipOwnerId>123456789012</ipOwnerId>
                                 </association>
                               {% endif %}
                             </item>
@@ -454,7 +495,7 @@ EC2_DESCRIBE_INSTANCES = """<DescribeInstancesResponse xmlns='http://ec2.amazona
 </DescribeInstancesResponse>"""
 
 EC2_TERMINATE_INSTANCES = """
-<TerminateInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+<TerminateInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instancesSet>
     {% for instance in instances %}
@@ -474,7 +515,7 @@ EC2_TERMINATE_INSTANCES = """
 </TerminateInstancesResponse>"""
 
 EC2_STOP_INSTANCES = """
-<StopInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+<StopInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instancesSet>
     {% for instance in instances %}
@@ -494,7 +535,7 @@ EC2_STOP_INSTANCES = """
 </StopInstancesResponse>"""
 
 EC2_START_INSTANCES = """
-<StartInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+<StartInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instancesSet>
     {% for instance in instances %}
@@ -513,12 +554,12 @@ EC2_START_INSTANCES = """
   </instancesSet>
 </StartInstancesResponse>"""
 
-EC2_REBOOT_INSTANCES = """<RebootInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+EC2_REBOOT_INSTANCES = """<RebootInstancesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <return>true</return>
 </RebootInstancesResponse>"""
 
-EC2_DESCRIBE_INSTANCE_ATTRIBUTE = """<DescribeInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+EC2_DESCRIBE_INSTANCE_ATTRIBUTE = """<DescribeInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instanceId>{{ instance.id }}</instanceId>
   <{{ attribute }}>
@@ -526,7 +567,7 @@ EC2_DESCRIBE_INSTANCE_ATTRIBUTE = """<DescribeInstanceAttributeResponse xmlns="h
   </{{ attribute }}>
 </DescribeInstanceAttributeResponse>"""
 
-EC2_DESCRIBE_INSTANCE_GROUPSET_ATTRIBUTE = """<DescribeInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+EC2_DESCRIBE_INSTANCE_GROUPSET_ATTRIBUTE = """<DescribeInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instanceId>{{ instance.id }}</instanceId>
   <{{ attribute }}>
@@ -538,13 +579,13 @@ EC2_DESCRIBE_INSTANCE_GROUPSET_ATTRIBUTE = """<DescribeInstanceAttributeResponse
   </{{ attribute }}>
 </DescribeInstanceAttributeResponse>"""
 
-EC2_MODIFY_INSTANCE_ATTRIBUTE = """<ModifyInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+EC2_MODIFY_INSTANCE_ATTRIBUTE = """<ModifyInstanceAttributeResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <return>true</return>
 </ModifyInstanceAttributeResponse>"""
 
 EC2_INSTANCE_STATUS = """<?xml version="1.0" encoding="UTF-8"?>
-<DescribeInstanceStatusResponse xmlns="http://ec2.amazonaws.com/doc/2014-05-01/">
+<DescribeInstanceStatusResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
     <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
     <instanceStatusSet>
       {% for instance in instances %}
@@ -586,3 +627,21 @@ EC2_INSTANCE_STATUS = """<?xml version="1.0" encoding="UTF-8"?>
       {% endfor %}
     </instanceStatusSet>
 </DescribeInstanceStatusResponse>"""
+
+EC2_DESCRIBE_INSTANCE_TYPES = """<?xml version="1.0" encoding="UTF-8"?>
+<DescribeInstanceTypesResponse xmlns="http://api.outscale.com/wsdl/fcuext/2014-04-15/">
+    <requestId>f8b86168-d034-4e65-b48d-3b84c78e64af</requestId>
+    <instanceTypeSet>
+    {% for instance_type in instance_types %}
+        <item>
+            <name>{{ instance_type.name }}</name>
+            <vcpu>{{ instance_type.cores }}</vcpu>
+            <memory>{{ instance_type.memory }}</memory>
+            <storageSize>{{ instance_type.disk }}</storageSize>
+            <storageCount>{{ instance_type.storageCount }}</storageCount>
+            <maxIpAddresses>{{ instance_type.maxIpAddresses }}</maxIpAddresses>
+            <ebsOptimizedAvailable>{{ instance_type.ebsOptimizedAvailable }}</ebsOptimizedAvailable>
+        </item>
+    {% endfor %}
+    </instanceTypeSet>
+</DescribeInstanceTypesResponse>"""

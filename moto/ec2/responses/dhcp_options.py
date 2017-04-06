@@ -1,11 +1,13 @@
 from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
 from moto.ec2.utils import (
-    dhcp_configuration_from_querystring,
-    sequence_from_querystring)
+    filters_from_querystring,
+    sequence_from_querystring,
+    dhcp_configuration_from_querystring)
 
 
 class DHCPOptions(BaseResponse):
+
     def associate_dhcp_options(self):
         dhcp_opt_id = self.querystring.get("DhcpOptionsId", [None])[0]
         vpc_id = self.querystring.get("VpcId", [None])[0]
@@ -47,15 +49,13 @@ class DHCPOptions(BaseResponse):
         return template.render(delete_status=delete_status)
 
     def describe_dhcp_options(self):
-        if "Filter.1.Name" in self.querystring:
-            raise NotImplementedError("Filtering not supported in describe_dhcp_options.")
-        elif "DhcpOptionsId.1" in self.querystring:
-            dhcp_opt_ids = sequence_from_querystring("DhcpOptionsId", self.querystring)
-            dhcp_opt = self.ec2_backend.describe_dhcp_options(dhcp_opt_ids)
-        else:
-            dhcp_opt = self.ec2_backend.describe_dhcp_options()
+        dhcp_opt_ids = sequence_from_querystring(
+            "DhcpOptionsId", self.querystring)
+        filters = filters_from_querystring(self.querystring)
+        dhcp_opts = self.ec2_backend.get_all_dhcp_options(
+            dhcp_opt_ids, filters)
         template = self.response_template(DESCRIBE_DHCP_OPTIONS_RESPONSE)
-        return template.render(dhcp_options=dhcp_opt)
+        return template.render(dhcp_options=dhcp_opts)
 
 
 CREATE_DHCP_OPTIONS_RESPONSE = u"""
@@ -104,16 +104,16 @@ DELETE_DHCP_OPTIONS_RESPONSE = u"""
 DESCRIBE_DHCP_OPTIONS_RESPONSE = u"""
 <DescribeDhcpOptionsResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
-  <item>
-    {% for dhcp_options_set in dhcp_options %}
-    <dhcpOptions>
+  <dhcpOptionsSet>
+  {% for dhcp_options_set in dhcp_options %}
+    <item>
       <dhcpOptionsId>{{ dhcp_options_set.id }}</dhcpOptionsId>
       <dhcpConfigurationSet>
       {% for key, values in dhcp_options_set.options.items() %}
         {{ values }}
         {% if values %}
         <item>
-          <key>{{key}}</key>
+          <key>{{ key }}</key>
           <valueSet>
             {% for value in values %}
             <item>
@@ -135,9 +135,9 @@ DESCRIBE_DHCP_OPTIONS_RESPONSE = u"""
           </item>
         {% endfor %}
       </tagSet>
-    </dhcpOptions>
-    {% endfor %}
-  </item>
+    </item>
+  {% endfor %}
+  </dhcpOptionsSet>
 </DescribeDhcpOptionsResponse>
 """
 

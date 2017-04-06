@@ -29,7 +29,8 @@ def bucket_name_from_url(url):
 
 def metadata_from_headers(headers):
     metadata = {}
-    meta_regex = re.compile('^x-amz-meta-([a-zA-Z0-9\-_]+)$', flags=re.IGNORECASE)
+    meta_regex = re.compile(
+        '^x-amz-meta-([a-zA-Z0-9\-_]+)$', flags=re.IGNORECASE)
     for header, value in headers.items():
         if isinstance(header, six.string_types):
             result = meta_regex.match(header)
@@ -46,6 +47,9 @@ def metadata_from_headers(headers):
 
 
 def clean_key_name(key_name):
+    if six.PY2:
+        return unquote(key_name.encode('utf-8')).decode('utf-8')
+
     return unquote(key_name)
 
 

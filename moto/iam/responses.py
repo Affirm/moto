@@ -1,17 +1,57 @@
 from __future__ import unicode_literals
 
 from moto.core.responses import BaseResponse
-from .models import iam_backend
+from .models import iam_backend, User
 
 
 class IamResponse(BaseResponse):
 
+    def attach_role_policy(self):
+        policy_arn = self._get_param('PolicyArn')
+        role_name = self._get_param('RoleName')
+        iam_backend.attach_role_policy(policy_arn, role_name)
+        template = self.response_template(ATTACH_ROLE_POLICY_TEMPLATE)
+        return template.render()
+
+    def create_policy(self):
+        description = self._get_param('Description')
+        path = self._get_param('Path')
+        policy_document = self._get_param('PolicyDocument')
+        policy_name = self._get_param('PolicyName')
+        policy = iam_backend.create_policy(
+            description, path, policy_document, policy_name)
+        template = self.response_template(CREATE_POLICY_TEMPLATE)
+        return template.render(policy=policy)
+
+    def list_attached_role_policies(self):
+        marker = self._get_param('Marker')
+        max_items = self._get_int_param('MaxItems', 100)
+        path_prefix = self._get_param('PathPrefix', '/')
+        role_name = self._get_param('RoleName')
+        policies, marker = iam_backend.list_attached_role_policies(
+            role_name, marker=marker, max_items=max_items, path_prefix=path_prefix)
+        template = self.response_template(LIST_ATTACHED_ROLE_POLICIES_TEMPLATE)
+        return template.render(policies=policies, marker=marker)
+
+    def list_policies(self):
+        marker = self._get_param('Marker')
+        max_items = self._get_int_param('MaxItems', 100)
+        only_attached = self._get_bool_param('OnlyAttached', False)
+        path_prefix = self._get_param('PathPrefix', '/')
+        scope = self._get_param('Scope', 'All')
+        policies, marker = iam_backend.list_policies(
+            marker, max_items, only_attached, path_prefix, scope)
+        template = self.response_template(LIST_POLICIES_TEMPLATE)
+        return template.render(policies=policies, marker=marker)
+
     def create_role(self):
         role_name = self._get_param('RoleName')
         path = self._get_param('Path')
-        assume_role_policy_document = self._get_param('AssumeRolePolicyDocument')
+        assume_role_policy_document = self._get_param(
+            'AssumeRolePolicyDocument')
 
-        role = iam_backend.create_role(role_name, assume_role_policy_document, path)
+        role = iam_backend.create_role(
+            role_name, assume_role_policy_document, path)
         template = self.response_template(CREATE_ROLE_TEMPLATE)
         return template.render(role=role)
 
@@ -39,7 +79,8 @@ class IamResponse(BaseResponse):
     def get_role_policy(self):
         role_name = self._get_param('RoleName')
         policy_name = self._get_param('PolicyName')
-        policy_name, policy_document = iam_backend.get_role_policy(role_name, policy_name)
+        policy_name, policy_document = iam_backend.get_role_policy(
+            role_name, policy_name)
         template = self.response_template(GET_ROLE_POLICY_TEMPLATE)
         return template.render(role_name=role_name,
                                policy_name=policy_name,
@@ -56,7 +97,8 @@ class IamResponse(BaseResponse):
         profile_name = self._get_param('InstanceProfileName')
         path = self._get_param('Path')
 
-        profile = iam_backend.create_instance_profile(profile_name, path, role_ids=[])
+        profile = iam_backend.create_instance_profile(
+            profile_name, path, role_ids=[])
         template = self.response_template(CREATE_INSTANCE_PROFILE_TEMPLATE)
         return template.render(profile=profile)
 
@@ -72,7 +114,17 @@ class IamResponse(BaseResponse):
         role_name = self._get_param('RoleName')
 
         iam_backend.add_role_to_instance_profile(profile_name, role_name)
-        template = self.response_template(ADD_ROLE_TO_INSTANCE_PROFILE_TEMPLATE)
+        template = self.response_template(
+            ADD_ROLE_TO_INSTANCE_PROFILE_TEMPLATE)
+        return template.render()
+
+    def remove_role_from_instance_profile(self):
+        profile_name = self._get_param('InstanceProfileName')
+        role_name = self._get_param('RoleName')
+
+        iam_backend.remove_role_from_instance_profile(profile_name, role_name)
+        template = self.response_template(
+            REMOVE_ROLE_FROM_INSTANCE_PROFILE_TEMPLATE)
         return template.render()
 
     def list_roles(self):
@@ -89,9 +141,11 @@ class IamResponse(BaseResponse):
 
     def list_instance_profiles_for_role(self):
         role_name = self._get_param('RoleName')
-        profiles = iam_backend.get_instance_profiles_for_role(role_name=role_name)
+        profiles = iam_backend.get_instance_profiles_for_role(
+            role_name=role_name)
 
-        template = self.response_template(LIST_INSTANCE_PROFILES_FOR_ROLE_TEMPLATE)
+        template = self.response_template(
+            LIST_INSTANCE_PROFILES_FOR_ROLE_TEMPLATE)
         return template.render(instance_profiles=profiles)
 
     def upload_server_certificate(self):
@@ -101,7 +155,8 @@ class IamResponse(BaseResponse):
         private_key = self._get_param('PrivateKey')
         cert_chain = self._get_param('CertificateName')
 
-        cert = iam_backend.upload_server_cert(cert_name, cert_body, private_key, cert_chain=cert_chain, path=path)
+        cert = iam_backend.upload_server_cert(
+            cert_name, cert_body, private_key, cert_chain=cert_chain, path=path)
         template = self.response_template(UPLOAD_CERT_TEMPLATE)
         return template.render(certificate=cert)
 
@@ -143,6 +198,32 @@ class IamResponse(BaseResponse):
         template = self.response_template(LIST_GROUPS_FOR_USER_TEMPLATE)
         return template.render(groups=groups)
 
+    def put_group_policy(self):
+        group_name = self._get_param('GroupName')
+        policy_name = self._get_param('PolicyName')
+        policy_document = self._get_param('PolicyDocument')
+        iam_backend.put_group_policy(group_name, policy_name, policy_document)
+        template = self.response_template(GENERIC_EMPTY_TEMPLATE)
+        return template.render(name="PutGroupPolicyResponse")
+
+    def list_group_policies(self):
+        group_name = self._get_param('GroupName')
+        marker = self._get_param('Marker')
+        max_items = self._get_param('MaxItems')
+        policies = iam_backend.list_group_policies(group_name,
+            marker=marker, max_items=max_items)
+        template = self.response_template(LIST_GROUP_POLICIES_TEMPLATE)
+        return template.render(name="ListGroupPoliciesResponse",
+                               policies=policies,
+                               marker=marker)
+
+    def get_group_policy(self):
+        group_name = self._get_param('GroupName')
+        policy_name = self._get_param('PolicyName')
+        policy_result = iam_backend.get_group_policy(group_name, policy_name)
+        template = self.response_template(GET_GROUP_POLICY_TEMPLATE)
+        return template.render(name="GetGroupPolicyResponse", **policy_result)
+
     def create_user(self):
         user_name = self._get_param('UserName')
         path = self._get_param('Path')
@@ -153,9 +234,22 @@ class IamResponse(BaseResponse):
 
     def get_user(self):
         user_name = self._get_param('UserName')
-        user = iam_backend.get_user(user_name)
+        if user_name:
+            user = iam_backend.get_user(user_name)
+        else:
+            user = User(name='default_user')
+            # If no user is specific, IAM returns the current user
+
         template = self.response_template(USER_TEMPLATE)
         return template.render(action='Get', user=user)
+
+    def list_users(self):
+        path_prefix = self._get_param('PathPrefix')
+        marker = self._get_param('Marker')
+        max_items = self._get_param('MaxItems')
+        users = iam_backend.list_users(path_prefix, marker, max_items)
+        template = self.response_template(LIST_USERS_TEMPLATE)
+        return template.render(action='List', users=users)
 
     def create_login_profile(self):
         user_name = self._get_param('UserName')
@@ -238,6 +332,12 @@ class IamResponse(BaseResponse):
         template = self.response_template(GENERIC_EMPTY_TEMPLATE)
         return template.render(name='DeleteUser')
 
+    def delete_login_profile(self):
+        user_name = self._get_param('UserName')
+        iam_backend.delete_login_profile(user_name)
+        template = self.response_template(GENERIC_EMPTY_TEMPLATE)
+        return template.render(name='DeleteLoginProfile')
+
     def generate_credential_report(self):
         if iam_backend.report_generated():
             template = self.response_template(CREDENTIAL_REPORT_GENERATED)
@@ -250,6 +350,81 @@ class IamResponse(BaseResponse):
         report = iam_backend.get_credential_report()
         template = self.response_template(CREDENTIAL_REPORT)
         return template.render(report=report)
+
+
+ATTACH_ROLE_POLICY_TEMPLATE = """<AttachRolePolicyResponse>
+  <ResponseMetadata>
+    <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+  </ResponseMetadata>
+</AttachRolePolicyResponse>"""
+
+CREATE_POLICY_TEMPLATE = """<CreatePolicyResponse>
+  <CreatePolicyResult>
+    <Policy>
+      <Arn>{{ policy.arn }}</Arn>
+      <AttachmentCount>{{ policy.attachment_count }}</AttachmentCount>
+      <CreateDate>{{ policy.create_datetime.isoformat() }}</CreateDate>
+      <DefaultVersionId>{{ policy.default_version_id }}</DefaultVersionId>
+      <Path>{{ policy.path }}</Path>
+      <PolicyId>{{ policy.id }}</PolicyId>
+      <PolicyName>{{ policy.name }}</PolicyName>
+      <UpdateDate>{{ policy.update_datetime.isoformat() }}</UpdateDate>
+    </Policy>
+  </CreatePolicyResult>
+  <ResponseMetadata>
+    <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+  </ResponseMetadata>
+</CreatePolicyResponse>"""
+
+LIST_ATTACHED_ROLE_POLICIES_TEMPLATE = """<ListAttachedRolePoliciesResponse>
+  <ListAttachedRolePoliciesResult>
+    {% if marker is none %}
+    <IsTruncated>false</IsTruncated>
+    {% else %}
+    <IsTruncated>true</IsTruncated>
+    <Marker>{{ marker }}</Marker>
+    {% endif %}
+    <AttachedPolicies>
+      {% for policy in policies %}
+      <member>
+        <PolicyName>{{ policy.name }}</PolicyName>
+        <PolicyArn>{{ policy.arn }}</PolicyArn>
+      </member>
+      {% endfor %}
+    </AttachedPolicies>
+  </ListAttachedRolePoliciesResult>
+  <ResponseMetadata>
+    <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+  </ResponseMetadata>
+</ListAttachedRolePoliciesResponse>"""
+
+LIST_POLICIES_TEMPLATE = """<ListPoliciesResponse>
+  <ListPoliciesResult>
+    {% if marker is none %}
+    <IsTruncated>false</IsTruncated>
+    {% else %}
+    <IsTruncated>true</IsTruncated>
+    <Marker>{{ marker }}</Marker>
+    {% endif %}
+    <Policies>
+      {% for policy in policies %}
+      <member>
+        <Arn>{{ policy.arn }}</Arn>
+        <AttachmentCount>{{ policy.attachment_count }}</AttachmentCount>
+        <CreateDate>{{ policy.create_datetime.isoformat() }}</CreateDate>
+        <DefaultVersionId>{{ policy.default_version_id }}</DefaultVersionId>
+        <Path>{{ policy.path }}</Path>
+        <PolicyId>{{ policy.id }}</PolicyId>
+        <PolicyName>{{ policy.name }}</PolicyName>
+        <UpdateDate>{{ policy.update_datetime.isoformat() }}</UpdateDate>
+      </member>
+      {% endfor %}
+    </Policies>
+  </ListPoliciesResult>
+  <ResponseMetadata>
+    <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+  </ResponseMetadata>
+</ListPoliciesResponse>"""
 
 GENERIC_EMPTY_TEMPLATE = """<{{ name }}Response>
    <ResponseMetadata>
@@ -264,7 +439,7 @@ CREATE_INSTANCE_PROFILE_TEMPLATE = """<CreateInstanceProfileResponse xmlns="http
       <Roles/>
       <InstanceProfileName>{{ profile.name }}</InstanceProfileName>
       <Path>{{ profile.path }}</Path>
-      <Arn>arn:aws:iam::123456789012:instance-profile/application_abc/component_xyz/Webserver</Arn>
+      <Arn>{{ profile.arn }}</Arn>
       <CreateDate>2012-05-09T16:11:10.222Z</CreateDate>
     </InstanceProfile>
   </CreateInstanceProfileResult>
@@ -281,7 +456,7 @@ GET_INSTANCE_PROFILE_TEMPLATE = """<GetInstanceProfileResponse xmlns="https://ia
         {% for role in profile.roles %}
         <member>
           <Path>{{ role.path }}</Path>
-          <Arn>arn:aws:iam::123456789012:role/application_abc/component_xyz/S3Access</Arn>
+          <Arn>{{ role.arn }}</Arn>
           <RoleName>{{ role.name }}</RoleName>
           <AssumeRolePolicyDocument>{{ role.assume_role_policy_document }}</AssumeRolePolicyDocument>
           <CreateDate>2012-05-09T15:45:35Z</CreateDate>
@@ -291,7 +466,7 @@ GET_INSTANCE_PROFILE_TEMPLATE = """<GetInstanceProfileResponse xmlns="https://ia
       </Roles>
       <InstanceProfileName>{{ profile.name }}</InstanceProfileName>
       <Path>{{ profile.path }}</Path>
-      <Arn>arn:aws:iam::123456789012:instance-profile/application_abc/component_xyz/Webserver</Arn>
+      <Arn>{{ profile.arn }}</Arn>
       <CreateDate>2012-05-09T16:11:10Z</CreateDate>
     </InstanceProfile>
   </GetInstanceProfileResult>
@@ -304,7 +479,7 @@ CREATE_ROLE_TEMPLATE = """<CreateRoleResponse xmlns="https://iam.amazonaws.com/d
   <CreateRoleResult>
     <Role>
       <Path>{{ role.path }}</Path>
-      <Arn>arn:aws:iam::123456789012:role/application_abc/component_xyz/S3Access</Arn>
+      <Arn>{{ role.arn }}</Arn>
       <RoleName>{{ role.name }}</RoleName>
       <AssumeRolePolicyDocument>{{ role.assume_role_policy_document }}</AssumeRolePolicyDocument>
       <CreateDate>2012-05-08T23:34:01.495Z</CreateDate>
@@ -331,7 +506,7 @@ GET_ROLE_TEMPLATE = """<GetRoleResponse xmlns="https://iam.amazonaws.com/doc/201
   <GetRoleResult>
     <Role>
       <Path>{{ role.path }}</Path>
-      <Arn>arn:aws:iam::123456789012:role/application_abc/component_xyz/S3Access</Arn>
+      <Arn>{{ role.arn }}</Arn>
       <RoleName>{{ role.name }}</RoleName>
       <AssumeRolePolicyDocument>{{ role.assume_role_policy_document }}</AssumeRolePolicyDocument>
       <CreateDate>2012-05-08T23:34:01Z</CreateDate>
@@ -349,6 +524,12 @@ ADD_ROLE_TO_INSTANCE_PROFILE_TEMPLATE = """<AddRoleToInstanceProfileResponse xml
   </ResponseMetadata>
 </AddRoleToInstanceProfileResponse>"""
 
+REMOVE_ROLE_FROM_INSTANCE_PROFILE_TEMPLATE = """<RemoveRoleFromInstanceProfileResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+  <ResponseMetadata>
+    <RequestId>12657608-99f2-11e1-a4c3-27EXAMPLE804</RequestId>
+  </ResponseMetadata>
+</RemoveRoleFromInstanceProfileResponse>"""
+
 LIST_ROLES_TEMPLATE = """<ListRolesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
   <ListRolesResult>
     <IsTruncated>false</IsTruncated>
@@ -356,7 +537,7 @@ LIST_ROLES_TEMPLATE = """<ListRolesResponse xmlns="https://iam.amazonaws.com/doc
       {% for role in roles %}
       <member>
         <Path>{{ role.path }}</Path>
-        <Arn>arn:aws:iam::123456789012:role/application_abc/component_xyz/S3Access</Arn>
+        <Arn>{{ role.arn }}</Arn>
         <RoleName>{{ role.name }}</RoleName>
         <AssumeRolePolicyDocument>{{ role.assume_role_policy_document }}</AssumeRolePolicyDocument>
         <CreateDate>2012-05-09T15:45:35Z</CreateDate>
@@ -391,10 +572,21 @@ LIST_INSTANCE_PROFILES_TEMPLATE = """<ListInstanceProfilesResponse xmlns="https:
       {% for instance in instance_profiles %}
       <member>
         <Id>{{ instance.id }}</Id>
-        <Roles/>
+        <Roles>
+          {% for role in instance.roles %}
+          <member>
+            <Path>{{ role.path }}</Path>
+            <Arn>{{ role.arn }}</Arn>
+            <RoleName>{{ role.name }}</RoleName>
+            <AssumeRolePolicyDocument>{{ role.assume_role_policy_document }}</AssumeRolePolicyDocument>
+            <CreateDate>2012-05-09T15:45:35Z</CreateDate>
+            <RoleId>{{ role.id }}</RoleId>
+          </member>
+          {% endfor %}
+        </Roles>
         <InstanceProfileName>{{ instance.name }}</InstanceProfileName>
         <Path>{{ instance.path }}</Path>
-        <Arn>arn:aws:iam::123456789012:instance-profile/application_abc/component_xyz/Database</Arn>
+        <Arn>{{ instance.arn }}</Arn>
         <CreateDate>2012-05-09T16:27:03Z</CreateDate>
       </member>
       {% endfor %}
@@ -412,7 +604,7 @@ UPLOAD_CERT_TEMPLATE = """<UploadServerCertificateResponse>
       {% if certificate.path %}
       <Path>{{ certificate.path }}</Path>
       {% endif %}
-      <Arn>arn:aws:iam::123456789012:server-certificate/{{ certificate.path }}/{{ certificate.cert_name }}</Arn>
+      <Arn>{{ certificate.arn }}</Arn>
       <UploadDate>2010-05-08T01:02:03.004Z</UploadDate>
       <ServerCertificateId>ASCACKCEVSQ6C2EXAMPLE</ServerCertificateId>
       <Expiration>2012-05-08T01:02:03.004Z</Expiration>
@@ -429,18 +621,14 @@ LIST_SERVER_CERTIFICATES_TEMPLATE = """<ListServerCertificatesResponse>
     <ServerCertificateMetadataList>
       {% for certificate in server_certificates %}
       <member>
-        <ServerCertificateMetadata>
-          <ServerCertificateName>{{ certificate.cert_name }}</ServerCertificateName>
-          {% if certificate.path %}
-          <Path>{{ certificate.path }}</Path>
-          <Arn>arn:aws:iam::123456789012:server-certificate/{{ certificate.path }}/{{ certificate.cert_name }}</Arn>
-          {% else %}
-          <Arn>arn:aws:iam::123456789012:server-certificate/{{ certificate.cert_name }}</Arn>
-          {% endif %}
-          <UploadDate>2010-05-08T01:02:03.004Z</UploadDate>
-          <ServerCertificateId>ASCACKCEVSQ6C2EXAMPLE</ServerCertificateId>
-          <Expiration>2012-05-08T01:02:03.004Z</Expiration>
-        </ServerCertificateMetadata>
+        <ServerCertificateName>{{ certificate.cert_name }}</ServerCertificateName>
+        {% if certificate.path %}
+            <Path>{{ certificate.path }}</Path>
+        {% endif %}
+        <Arn>{{ certificate.arn }}</Arn>
+        <UploadDate>2010-05-08T01:02:03.004Z</UploadDate>
+        <ServerCertificateId>ASCACKCEVSQ6C2EXAMPLE</ServerCertificateId>
+        <Expiration>2012-05-08T01:02:03.004Z</Expiration>
       </member>
       {% endfor %}
     </ServerCertificateMetadataList>
@@ -456,11 +644,9 @@ GET_SERVER_CERTIFICATE_TEMPLATE = """<GetServerCertificateResponse>
       <ServerCertificateMetadata>
         <ServerCertificateName>{{ certificate.cert_name }}</ServerCertificateName>
         {% if certificate.path %}
-        <Path>{{ certificate.path }}</Path>
-        <Arn>arn:aws:iam::123456789012:server-certificate/{{ certificate.path }}/{{ certificate.cert_name }}</Arn>
-        {% else %}
-        <Arn>arn:aws:iam::123456789012:server-certificate/{{ certificate.cert_name }}</Arn>
+            <Path>{{ certificate.path }}</Path>
         {% endif %}
+        <Arn>{{ certificate.arn }}</Arn>
         <UploadDate>2010-05-08T01:02:03.004Z</UploadDate>
         <ServerCertificateId>ASCACKCEVSQ6C2EXAMPLE</ServerCertificateId>
         <Expiration>2012-05-08T01:02:03.004Z</Expiration>
@@ -479,7 +665,7 @@ CREATE_GROUP_TEMPLATE = """<CreateGroupResponse>
          <Path>{{ group.path }}</Path>
          <GroupName>{{ group.name }}</GroupName>
          <GroupId>{{ group.id }}</GroupId>
-         <Arn>arn:aws:iam::123456789012:group/{{ group.path }}</Arn>
+         <Arn>{{ group.arn }}</Arn>
       </Group>
    </CreateGroupResult>
    <ResponseMetadata>
@@ -493,7 +679,7 @@ GET_GROUP_TEMPLATE = """<GetGroupResponse>
          <Path>{{ group.path }}</Path>
          <GroupName>{{ group.name }}</GroupName>
          <GroupId>{{ group.id }}</GroupId>
-         <Arn>arn:aws:iam::123456789012:group/{{ group.path }}</Arn>
+         <Arn>{{ group.arn }}</Arn>
       </Group>
       <Users>
         {% for user in group.users %}
@@ -501,9 +687,7 @@ GET_GROUP_TEMPLATE = """<GetGroupResponse>
             <Path>{{ user.path }}</Path>
             <UserName>{{ user.name }}</UserName>
             <UserId>{{ user.id }}</UserId>
-            <Arn>
-            arn:aws:iam::123456789012:user/{{ user.path }}/{{ user.name}}
-            </Arn>
+            <Arn>{{ user.arn }}</Arn>
           </member>
         {% endfor %}
       </Users>
@@ -522,7 +706,7 @@ LIST_GROUPS_TEMPLATE = """<ListGroupsResponse>
             <Path>{{ group.path }}</Path>
             <GroupName>{{ group.name }}</GroupName>
             <GroupId>{{ group.id }}</GroupId>
-            <Arn>arn:aws:iam::123456789012:group/{{ group.path }}</Arn>
+            <Arn>{{ group.arn }}</Arn>
         </member>
         {% endfor %}
     </Groups>
@@ -541,7 +725,7 @@ LIST_GROUPS_FOR_USER_TEMPLATE = """<ListGroupsForUserResponse>
             <Path>{{ group.path }}</Path>
             <GroupName>{{ group.name }}</GroupName>
             <GroupId>{{ group.id }}</GroupId>
-            <Arn>arn:aws:iam::123456789012:group/{{ group.path }}</Arn>
+            <Arn>{{ group.arn }}</Arn>
         </member>
         {% endfor %}
     </Groups>
@@ -552,6 +736,35 @@ LIST_GROUPS_FOR_USER_TEMPLATE = """<ListGroupsForUserResponse>
   </ResponseMetadata>
 </ListGroupsForUserResponse>"""
 
+LIST_GROUP_POLICIES_TEMPLATE = """<ListGroupPoliciesResponse>
+  <ListGroupPoliciesResult>
+    {% if marker is none %}
+    <IsTruncated>false</IsTruncated>
+    {% else %}
+    <IsTruncated>true</IsTruncated>
+    <Marker>{{ marker }}</Marker>
+    {% endif %}
+    <PolicyNames>
+    {% for policy in policies %}
+        <member>{{ policy }}</member>
+    {% endfor %}
+    </PolicyNames>
+  </ListGroupPoliciesResult>
+  <ResponseMetadata>
+    <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+  </ResponseMetadata>
+</ListGroupPoliciesResponse>"""
+
+GET_GROUP_POLICY_TEMPLATE = """<GetGroupPolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">
+<GetGroupPolicyResult>
+  <PolicyName>{{ policy_name }}</PolicyName>
+  <GroupName>{{ group_name }}</GroupName>
+  <PolicyDocument>{{ policy_document }}</PolicyDocument>
+</GetGroupPolicyResult>
+<ResponseMetadata>
+  <RequestId>7e7cd8bc-99ef-11e1-a4c3-27EXAMPLE804</RequestId>
+</ResponseMetadata>
+</GetGroupPolicyResponse>"""
 
 USER_TEMPLATE = """<{{ action }}UserResponse>
    <{{ action }}UserResult>
@@ -559,7 +772,7 @@ USER_TEMPLATE = """<{{ action }}UserResponse>
          <Path>{{ user.path }}</Path>
          <UserName>{{ user.name }}</UserName>
          <UserId>{{ user.id }}</UserId>
-         <Arn>arn:aws:iam::123456789012:user/{{ user.path }}/{{ user.name }}</Arn>
+         <Arn>{{ user.arn }}</Arn>
      </User>
    </{{ action }}UserResult>
    <ResponseMetadata>
@@ -567,14 +780,32 @@ USER_TEMPLATE = """<{{ action }}UserResponse>
    </ResponseMetadata>
 </{{ action }}UserResponse>"""
 
+LIST_USERS_TEMPLATE = """<{{ action }}UsersResponse>
+   <{{ action }}UsersResult>
+      <Users>
+         {% for user in users %}
+         <member>
+             <UserId>{{ user.id }}</UserId>
+             <Path>{{ user.path }}</Path>
+             <UserName>{{ user.name }}</UserName>
+             <Arn>{{ user.arn }}</Arn>
+         </member>
+         {% endfor %}
+     </Users>
+   </{{ action }}UsersResult>
+   <ResponseMetadata>
+      <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
+   </ResponseMetadata>
+</{{ action }}UsersResponse>"""
+
 CREATE_LOGIN_PROFILE_TEMPLATE = """
 <CreateLoginProfileResponse>
-   <CreateUserResult>
+   <CreateLoginProfileResult>
       <LoginProfile>
          <UserName>{{ user_name }}</UserName>
          <CreateDate>2011-09-19T23:00:56Z</CreateDate>
       </LoginProfile>
-   </CreateUserResult>
+   </CreateLoginProfileResult>
    <ResponseMetadata>
       <RequestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</RequestId>
    </ResponseMetadata>
@@ -671,7 +902,7 @@ LIST_INSTANCE_PROFILES_FOR_ROLE_TEMPLATE = """<ListInstanceProfilesForRoleRespon
         {% for role in profile.roles %}
         <member>
           <Path>{{ role.path }}</Path>
-          <Arn>arn:aws:iam::123456789012:role{{ role.path }}S3Access</Arn>
+          <Arn>{{ role.arn }}</Arn>
           <RoleName>{{ role.name }}</RoleName>
           <AssumeRolePolicyDocument>{{ role.assume_policy_document }}</AssumeRolePolicyDocument>
           <CreateDate>2012-05-09T15:45:35Z</CreateDate>
@@ -681,7 +912,7 @@ LIST_INSTANCE_PROFILES_FOR_ROLE_TEMPLATE = """<ListInstanceProfilesForRoleRespon
       </Roles>
       <InstanceProfileName>{{ profile.name }}</InstanceProfileName>
       <Path>{{ profile.path }}</Path>
-      <Arn>arn:aws:iam::123456789012:instance-profile{{ profile.path }}Webserver</Arn>
+      <Arn>{{ profile.arn }}</Arn>
       <CreateDate>2012-05-09T16:27:11Z</CreateDate>
     </member>
     {% endfor %}

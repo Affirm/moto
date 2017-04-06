@@ -1,30 +1,31 @@
 from __future__ import unicode_literals
 
 import hashlib
-import time
 import re
 from xml.sax.saxutils import escape
 
 import boto.sqs
 
-from moto.core import BaseBackend
-from moto.core.utils import camelcase_to_underscores, get_random_message_id
-from .utils import generate_receipt_handle, unix_time_millis
+from moto.core import BaseBackend, BaseModel
+from moto.core.utils import camelcase_to_underscores, get_random_message_id, unix_time, unix_time_millis
+from .utils import generate_receipt_handle
 from .exceptions import (
     ReceiptHandleIsInvalid,
     MessageNotInflight
 )
 
 DEFAULT_ACCOUNT_ID = 123456789012
+DEFAULT_SENDER_ID = "AIDAIT2UOQQY3AUEKVGXU"
 
 
-class Message(object):
+class Message(BaseModel):
+
     def __init__(self, message_id, body):
         self.id = message_id
         self._body = body
         self.message_attributes = {}
         self.receipt_handle = None
-        self.sender_id = DEFAULT_ACCOUNT_ID
+        self.sender_id = DEFAULT_SENDER_ID
         self.sent_timestamp = None
         self.approximate_first_receive_timestamp = None
         self.approximate_receive_count = 0
@@ -34,7 +35,7 @@ class Message(object):
     @property
     def md5(self):
         body_md5 = hashlib.md5()
-        body_md5.update(self.body.encode('utf-8'))
+        body_md5.update(self._body.encode('utf-8'))
         return body_md5.hexdigest()
 
     @property
@@ -92,7 +93,7 @@ class Message(object):
         return False
 
 
-class Queue(object):
+class Queue(BaseModel):
     camelcase_attributes = ['ApproximateNumberOfMessages',
                             'ApproximateNumberOfMessagesDelayed',
                             'ApproximateNumberOfMessagesNotVisible',
@@ -103,21 +104,27 @@ class Queue(object):
                             'MessageRetentionPeriod',
                             'QueueArn',
                             'ReceiveMessageWaitTimeSeconds',
-                            'VisibilityTimeout']
+                            'VisibilityTimeout',
+                            'WaitTimeSeconds']
 
-    def __init__(self, name, visibility_timeout):
+    def __init__(self, name, visibility_timeout, wait_time_seconds, region):
         self.name = name
         self.visibility_timeout = visibility_timeout or 30
+        self.region = region
+
+        # wait_time_seconds will be set to immediate return messages
+        self.wait_time_seconds = int(wait_time_seconds) if wait_time_seconds else 0
         self._messages = []
 
-        now = time.time()
+        now = unix_time()
 
         self.created_timestamp = now
         self.delay_seconds = 0
         self.last_modified_timestamp = now
         self.maximum_message_size = 64 << 10
         self.message_retention_period = 86400 * 4  # four days
-        self.queue_arn = 'arn:aws:sqs:sqs.us-east-1:123456789012:%s' % self.name
+        self.queue_arn = 'arn:aws:sqs:{0}:123456789012:{1}'.format(
+            self.region, self.name)
         self.receive_message_wait_time_seconds = 0
 
     @classmethod
@@ -128,10 +135,11 @@ class Queue(object):
         return sqs_backend.create_queue(
             name=properties['QueueName'],
             visibility_timeout=properties.get('VisibilityTimeout'),
+            wait_time_seconds=properties.get('WaitTimeSeconds')
         )
 
     @classmethod
-    def update_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
+    def update_from_cloudformation_json(cls, original_resource, new_resource_name, cloudformation_json, region_name):
         properties = cloudformation_json['Properties']
         queue_name = properties['QueueName']
 
@@ -139,6 +147,9 @@ class Queue(object):
         queue = sqs_backend.get_queue(queue_name)
         if 'VisibilityTimeout' in properties:
             queue.visibility_timeout = int(properties['VisibilityTimeout'])
+
+        if 'WaitTimeSeconds' in properties:
+            queue.wait_time_seconds = int(properties['WaitTimeSeconds'])
         return queue
 
     @classmethod
@@ -168,8 +179,12 @@ class Queue(object):
     def attributes(self):
         result = {}
         for attribute in self.camelcase_attributes:
-            result[attribute] = getattr(self, camelcase_to_underscores(attribute))
+            result[attribute] = getattr(
+                self, camelcase_to_underscores(attribute))
         return result
+
+    def url(self, request_url):
+        return "{0}://{1}/123456789012/{2}".format(request_url.scheme, request_url.netloc, self.name)
 
     @property
     def messages(self):
@@ -188,14 +203,22 @@ class Queue(object):
 
 
 class SQSBackend(BaseBackend):
-    def __init__(self):
+
+    def __init__(self, region_name):
+        self.region_name = region_name
         self.queues = {}
         super(SQSBackend, self).__init__()
 
-    def create_queue(self, name, visibility_timeout):
+    def reset(self):
+        region_name = self.region_name
+        self.__dict__ = {}
+        self.__init__(region_name)
+
+    def create_queue(self, name, visibility_timeout, wait_time_seconds):
         queue = self.queues.get(name)
         if queue is None:
-            queue = Queue(name, visibility_timeout)
+            queue = Queue(name, visibility_timeout,
+                          wait_time_seconds, self.region_name)
             self.queues[name] = queue
         return queue
 
@@ -246,7 +269,7 @@ class SQSBackend(BaseBackend):
 
         return message
 
-    def receive_messages(self, queue_name, count):
+    def receive_messages(self, queue_name, count, wait_seconds_timeout, visibility_timeout):
         """
         Attempt to retrieve visible messages from a queue.
 
@@ -257,16 +280,31 @@ class SQSBackend(BaseBackend):
 
         :param string queue_name: The name of the queue to read from.
         :param int count: The maximum amount of messages to retrieve.
+        :param int visibility_timeout: The number of seconds the message should remain invisible to other queue readers.
         """
         queue = self.get_queue(queue_name)
         result = []
+
+        polling_end = unix_time() + wait_seconds_timeout
+
         # queue.messages only contains visible messages
-        for message in queue.messages:
-            message.mark_received(
-                visibility_timeout=queue.visibility_timeout
-            )
-            result.append(message)
-            if len(result) >= count:
+        while True:
+            if len(queue.messages) == 0:
+                import time
+                time.sleep(0.001)
+                continue
+
+            for message in queue.messages:
+                if not message.visible:
+                    continue
+                message.mark_received(
+                    visibility_timeout=visibility_timeout
+                )
+                result.append(message)
+                if len(result) >= count:
+                    break
+
+            if result or unix_time() > polling_end:
                 break
 
         return result
@@ -299,4 +337,4 @@ class SQSBackend(BaseBackend):
 
 sqs_backends = {}
 for region in boto.sqs.regions():
-    sqs_backends[region.name] = SQSBackend()
+    sqs_backends[region.name] = SQSBackend(region.name)

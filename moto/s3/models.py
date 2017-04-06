@@ -9,22 +9,23 @@ import codecs
 import six
 
 from bisect import insort
-from moto.core import BaseBackend
+from moto.core import BaseBackend, BaseModel
 from moto.core.utils import iso_8601_datetime_with_milliseconds, rfc_1123_datetime
-from .exceptions import BucketAlreadyExists, MissingBucket, InvalidPart, EntityTooSmall
+from .exceptions import BucketAlreadyExists, MissingBucket, MissingKey, InvalidPart, EntityTooSmall
 from .utils import clean_key_name, _VersionedKeyStore
 
 UPLOAD_ID_BYTES = 43
 UPLOAD_PART_MIN_SIZE = 5242880
 
 
-class FakeKey(object):
+class FakeKey(BaseModel):
 
     def __init__(self, name, value, storage="STANDARD", etag=None, is_versioned=False, version_id=0):
         self.name = name
         self.value = value
         self.last_modified = datetime.datetime.utcnow()
-        self._storage_class = storage
+        self.acl = get_canned_acl('private')
+        self._storage_class = storage if storage else "STANDARD"
         self._metadata = {}
         self._expiry = None
         self._etag = etag
@@ -44,6 +45,9 @@ class FakeKey(object):
 
     def set_storage_class(self, storage_class):
         self._storage_class = storage_class
+
+    def set_acl(self, acl):
+        self.acl = acl
 
     def append_to_value(self, value):
         self.value += value
@@ -85,20 +89,21 @@ class FakeKey(object):
 
     @property
     def response_dict(self):
-        r = {
-            'etag': self.etag,
+        res = {
+            'Etag': self.etag,
             'last-modified': self.last_modified_RFC1123,
+            'content-length': str(len(self.value)),
         }
         if self._storage_class != 'STANDARD':
-            r['x-amz-storage-class'] = self._storage_class
+            res['x-amz-storage-class'] = self._storage_class
         if self._expiry is not None:
             rhdr = 'ongoing-request="false", expiry-date="{0}"'
-            r['x-amz-restore'] = rhdr.format(self.expiry_date)
+            res['x-amz-restore'] = rhdr.format(self.expiry_date)
 
         if self._is_versioned:
-            r['x-amz-version-id'] = self._version_id
+            res['x-amz-version-id'] = str(self._version_id)
 
-        return r
+        return res
 
     @property
     def size(self):
@@ -114,7 +119,8 @@ class FakeKey(object):
             return self._expiry.strftime("%a, %d %b %Y %H:%M:%S GMT")
 
 
-class FakeMultipart(object):
+class FakeMultipart(BaseModel):
+
     def __init__(self, key_name, metadata):
         self.key_name = key_name
         self.metadata = metadata
@@ -161,7 +167,75 @@ class FakeMultipart(object):
             yield self.parts[part_id]
 
 
-class LifecycleRule(object):
+class FakeGrantee(BaseModel):
+
+    def __init__(self, id='', uri='', display_name=''):
+        self.id = id
+        self.uri = uri
+        self.display_name = display_name
+
+    @property
+    def type(self):
+        return 'Group' if self.uri else 'CanonicalUser'
+
+
+ALL_USERS_GRANTEE = FakeGrantee(
+    uri='http://acs.amazonaws.com/groups/global/AllUsers')
+AUTHENTICATED_USERS_GRANTEE = FakeGrantee(
+    uri='http://acs.amazonaws.com/groups/global/AuthenticatedUsers')
+LOG_DELIVERY_GRANTEE = FakeGrantee(
+    uri='http://acs.amazonaws.com/groups/s3/LogDelivery')
+
+PERMISSION_FULL_CONTROL = 'FULL_CONTROL'
+PERMISSION_WRITE = 'WRITE'
+PERMISSION_READ = 'READ'
+PERMISSION_WRITE_ACP = 'WRITE_ACP'
+PERMISSION_READ_ACP = 'READ_ACP'
+
+
+class FakeGrant(BaseModel):
+
+    def __init__(self, grantees, permissions):
+        self.grantees = grantees
+        self.permissions = permissions
+
+
+class FakeAcl(BaseModel):
+
+    def __init__(self, grants=[]):
+        self.grants = grants
+
+
+def get_canned_acl(acl):
+    owner_grantee = FakeGrantee(
+        id='75aa57f09aa0c8caeab4f8c24e99d10f8e7faeebf76c078efc7c6caea54ba06a')
+    grants = [FakeGrant([owner_grantee], [PERMISSION_FULL_CONTROL])]
+    if acl == 'private':
+        pass  # no other permissions
+    elif acl == 'public-read':
+        grants.append(FakeGrant([ALL_USERS_GRANTEE], [PERMISSION_READ]))
+    elif acl == 'public-read-write':
+        grants.append(FakeGrant([ALL_USERS_GRANTEE], [
+                      PERMISSION_READ, PERMISSION_WRITE]))
+    elif acl == 'authenticated-read':
+        grants.append(
+            FakeGrant([AUTHENTICATED_USERS_GRANTEE], [PERMISSION_READ]))
+    elif acl == 'bucket-owner-read':
+        pass  # TODO: bucket owner ACL
+    elif acl == 'bucket-owner-full-control':
+        pass  # TODO: bucket owner ACL
+    elif acl == 'aws-exec-read':
+        pass  # TODO: bucket owner, EC2 Read
+    elif acl == 'log-delivery-write':
+        grants.append(FakeGrant([LOG_DELIVERY_GRANTEE], [
+                      PERMISSION_READ_ACP, PERMISSION_WRITE]))
+    else:
+        assert False, 'Unknown canned acl: %s' % (acl,)
+    return FakeAcl(grants=grants)
+
+
+class LifecycleRule(BaseModel):
+
     def __init__(self, id=None, prefix=None, status=None, expiration_days=None,
                  expiration_date=None, transition_days=None,
                  transition_date=None, storage_class=None):
@@ -175,7 +249,7 @@ class LifecycleRule(object):
         self.storage_class = storage_class
 
 
-class FakeBucket(object):
+class FakeBucket(BaseModel):
 
     def __init__(self, name, region_name):
         self.name = name
@@ -185,6 +259,8 @@ class FakeBucket(object):
         self.versioning_status = None
         self.rules = []
         self.policy = None
+        self.website_configuration = None
+        self.acl = get_canned_acl('private')
 
     @property
     def location(self):
@@ -207,19 +283,38 @@ class FakeBucket(object):
                 expiration_date=expiration.get('Date') if expiration else None,
                 transition_days=transition.get('Days') if transition else None,
                 transition_date=transition.get('Date') if transition else None,
-                storage_class=transition['StorageClass'] if transition else None,
+                storage_class=transition[
+                    'StorageClass'] if transition else None,
             ))
 
     def delete_lifecycle(self):
         self.rules = []
 
+    def set_website_configuration(self, website_configuration):
+        self.website_configuration = website_configuration
+
     def get_cfn_attribute(self, attribute_name):
         from moto.cloudformation.exceptions import UnformattedGetAttTemplateException
         if attribute_name == 'DomainName':
-            raise NotImplementedError('"Fn::GetAtt" : [ "{0}" , "DomainName" ]"')
+            raise NotImplementedError(
+                '"Fn::GetAtt" : [ "{0}" , "DomainName" ]"')
         elif attribute_name == 'WebsiteURL':
-            raise NotImplementedError('"Fn::GetAtt" : [ "{0}" , "WebsiteURL" ]"')
+            raise NotImplementedError(
+                '"Fn::GetAtt" : [ "{0}" , "WebsiteURL" ]"')
         raise UnformattedGetAttTemplateException()
+
+    def set_acl(self, acl):
+        self.acl = acl
+
+    @property
+    def physical_resource_id(self):
+        return self.name
+
+    @classmethod
+    def create_from_cloudformation_json(
+            cls, resource_name, cloudformation_json, region_name):
+        bucket = s3_backend.create_bucket(resource_name, region_name)
+        return bucket
 
 
 class S3Backend(BaseBackend):
@@ -276,9 +371,21 @@ class S3Backend(BaseBackend):
     def set_bucket_policy(self, bucket_name, policy):
         self.get_bucket(bucket_name).policy = policy
 
+    def delete_bucket_policy(self, bucket_name, body):
+        bucket = self.get_bucket(bucket_name)
+        bucket.policy = None
+
     def set_bucket_lifecycle(self, bucket_name, rules):
         bucket = self.get_bucket(bucket_name)
         bucket.set_lifecycle(rules)
+
+    def set_bucket_website_configuration(self, bucket_name, website_configuration):
+        bucket = self.get_bucket(bucket_name)
+        bucket.set_website_configuration(website_configuration)
+
+    def get_bucket_website_configuration(self, bucket_name):
+        bucket = self.get_bucket(bucket_name)
+        return bucket.website_configuration
 
     def set_key(self, bucket_name, key_name, value, storage=None, etag=None):
         key_name = clean_key_name(key_name)
@@ -314,11 +421,13 @@ class S3Backend(BaseBackend):
         bucket = self.get_bucket(bucket_name)
         if bucket:
             if version_id is None:
-                return bucket.keys.get(key_name)
+                if key_name in bucket.keys:
+                    return bucket.keys[key_name]
             else:
                 for key in bucket.keys.getlist(key_name):
                     if str(key._version_id) == str(version_id):
                         return key
+        raise MissingKey(key_name=key_name)
 
     def initiate_multipart(self, bucket_name, key_name, metadata):
         bucket = self.get_bucket(bucket_name)
@@ -357,12 +466,15 @@ class S3Backend(BaseBackend):
         return multipart.set_part(part_id, value)
 
     def copy_part(self, dest_bucket_name, multipart_id, part_id,
-                  src_bucket_name, src_key_name):
+                  src_bucket_name, src_key_name, start_byte, end_byte):
         src_key_name = clean_key_name(src_key_name)
         src_bucket = self.get_bucket(src_bucket_name)
         dest_bucket = self.get_bucket(dest_bucket_name)
         multipart = dest_bucket.multiparts[multipart_id]
-        return multipart.set_part(part_id, src_bucket.keys[src_key_name].value)
+        src_value = src_bucket.keys[src_key_name].value
+        if start_byte is not None:
+            src_value = src_value[start_byte:end_byte + 1]
+        return multipart.set_part(part_id, src_value)
 
     def prefix_query(self, bucket, prefix, delimiter):
         key_results = set()
@@ -373,38 +485,59 @@ class S3Backend(BaseBackend):
                     key_without_prefix = key_name.replace(prefix, "", 1)
                     if delimiter and delimiter in key_without_prefix:
                         # If delimiter, we need to split out folder_results
-                        key_without_delimiter = key_without_prefix.split(delimiter)[0]
-                        folder_results.add("{0}{1}{2}".format(prefix, key_without_delimiter, delimiter))
+                        key_without_delimiter = key_without_prefix.split(delimiter)[
+                            0]
+                        folder_results.add("{0}{1}{2}".format(
+                            prefix, key_without_delimiter, delimiter))
                     else:
                         key_results.add(key)
         else:
             for key_name, key in bucket.keys.items():
                 if delimiter and delimiter in key_name:
                     # If delimiter, we need to split out folder_results
-                    folder_results.add(key_name.split(delimiter)[0] + delimiter)
+                    folder_results.add(key_name.split(
+                        delimiter)[0] + delimiter)
                 else:
                     key_results.add(key)
 
         key_results = sorted(key_results, key=lambda key: key.name)
-        folder_results = [folder_name for folder_name in sorted(folder_results, key=lambda key: key)]
+        folder_results = [folder_name for folder_name in sorted(
+            folder_results, key=lambda key: key)]
 
         return key_results, folder_results
 
     def delete_key(self, bucket_name, key_name):
         key_name = clean_key_name(key_name)
         bucket = self.get_bucket(bucket_name)
-        return bucket.keys.pop(key_name)
 
-    def copy_key(self, src_bucket_name, src_key_name, dest_bucket_name, dest_key_name, storage=None):
+        try:
+            bucket.keys.pop(key_name)
+            return True
+        except KeyError:
+            return False
+
+    def copy_key(self, src_bucket_name, src_key_name, dest_bucket_name,
+                 dest_key_name, storage=None, acl=None, src_version_id=None):
         src_key_name = clean_key_name(src_key_name)
         dest_key_name = clean_key_name(dest_key_name)
-        src_bucket = self.get_bucket(src_bucket_name)
         dest_bucket = self.get_bucket(dest_bucket_name)
-        key = src_bucket.keys[src_key_name]
+        key = self.get_key(src_bucket_name, src_key_name,
+                           version_id=src_version_id)
         if dest_key_name != src_key_name:
             key = key.copy(dest_key_name)
         dest_bucket.keys[dest_key_name] = key
         if storage is not None:
-            dest_bucket.keys[dest_key_name].set_storage_class(storage)
+            key.set_storage_class(storage)
+        if acl is not None:
+            key.set_acl(acl)
+
+    def set_bucket_acl(self, bucket_name, acl):
+        bucket = self.get_bucket(bucket_name)
+        bucket.set_acl(acl)
+
+    def get_bucket_acl(self, bucket_name):
+        bucket = self.get_bucket(bucket_name)
+        return bucket.acl
+
 
 s3_backend = S3Backend()

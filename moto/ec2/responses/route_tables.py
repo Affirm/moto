@@ -8,24 +8,28 @@ class RouteTables(BaseResponse):
     def associate_route_table(self):
         route_table_id = self.querystring.get('RouteTableId')[0]
         subnet_id = self.querystring.get('SubnetId')[0]
-        association_id = self.ec2_backend.associate_route_table(route_table_id, subnet_id)
+        association_id = self.ec2_backend.associate_route_table(
+            route_table_id, subnet_id)
         template = self.response_template(ASSOCIATE_ROUTE_TABLE_RESPONSE)
         return template.render(association_id=association_id)
 
     def create_route(self):
         route_table_id = self.querystring.get('RouteTableId')[0]
-        destination_cidr_block = self.querystring.get('DestinationCidrBlock')[0]
+        destination_cidr_block = self.querystring.get(
+            'DestinationCidrBlock')[0]
 
         gateway_id = optional_from_querystring('GatewayId', self.querystring)
         instance_id = optional_from_querystring('InstanceId', self.querystring)
-        interface_id = optional_from_querystring('NetworkInterfaceId', self.querystring)
-        pcx_id = optional_from_querystring('VpcPeeringConnectionId', self.querystring)
+        interface_id = optional_from_querystring(
+            'NetworkInterfaceId', self.querystring)
+        pcx_id = optional_from_querystring(
+            'VpcPeeringConnectionId', self.querystring)
 
         self.ec2_backend.create_route(route_table_id, destination_cidr_block,
-            gateway_id=gateway_id,
-            instance_id=instance_id,
-            interface_id=interface_id,
-            vpc_peering_connection_id=pcx_id)
+                                      gateway_id=gateway_id,
+                                      instance_id=instance_id,
+                                      interface_id=interface_id,
+                                      vpc_peering_connection_id=pcx_id)
 
         template = self.response_template(CREATE_ROUTE_RESPONSE)
         return template.render()
@@ -38,7 +42,8 @@ class RouteTables(BaseResponse):
 
     def delete_route(self):
         route_table_id = self.querystring.get('RouteTableId')[0]
-        destination_cidr_block = self.querystring.get('DestinationCidrBlock')[0]
+        destination_cidr_block = self.querystring.get(
+            'DestinationCidrBlock')[0]
         self.ec2_backend.delete_route(route_table_id, destination_cidr_block)
         template = self.response_template(DELETE_ROUTE_RESPONSE)
         return template.render()
@@ -52,7 +57,8 @@ class RouteTables(BaseResponse):
     def describe_route_tables(self):
         route_table_ids = route_table_ids_from_querystring(self.querystring)
         filters = filters_from_querystring(self.querystring)
-        route_tables = self.ec2_backend.get_all_route_tables(route_table_ids, filters)
+        route_tables = self.ec2_backend.get_all_route_tables(
+            route_table_ids, filters)
         template = self.response_template(DESCRIBE_ROUTE_TABLES_RESPONSE)
         return template.render(route_tables=route_tables)
 
@@ -64,18 +70,21 @@ class RouteTables(BaseResponse):
 
     def replace_route(self):
         route_table_id = self.querystring.get('RouteTableId')[0]
-        destination_cidr_block = self.querystring.get('DestinationCidrBlock')[0]
+        destination_cidr_block = self.querystring.get(
+            'DestinationCidrBlock')[0]
 
         gateway_id = optional_from_querystring('GatewayId', self.querystring)
         instance_id = optional_from_querystring('InstanceId', self.querystring)
-        interface_id = optional_from_querystring('NetworkInterfaceId', self.querystring)
-        pcx_id = optional_from_querystring('VpcPeeringConnectionId', self.querystring)
+        interface_id = optional_from_querystring(
+            'NetworkInterfaceId', self.querystring)
+        pcx_id = optional_from_querystring(
+            'VpcPeeringConnectionId', self.querystring)
 
         self.ec2_backend.replace_route(route_table_id, destination_cidr_block,
-            gateway_id=gateway_id,
-            instance_id=instance_id,
-            interface_id=interface_id,
-            vpc_peering_connection_id=pcx_id)
+                                       gateway_id=gateway_id,
+                                       instance_id=instance_id,
+                                       interface_id=interface_id,
+                                       vpc_peering_connection_id=pcx_id)
 
         template = self.response_template(REPLACE_ROUTE_RESPONSE)
         return template.render()
@@ -83,27 +92,29 @@ class RouteTables(BaseResponse):
     def replace_route_table_association(self):
         route_table_id = self.querystring.get('RouteTableId')[0]
         association_id = self.querystring.get('AssociationId')[0]
-        new_association_id = self.ec2_backend.replace_route_table_association(association_id, route_table_id)
-        template = self.response_template(REPLACE_ROUTE_TABLE_ASSOCIATION_RESPONSE)
+        new_association_id = self.ec2_backend.replace_route_table_association(
+            association_id, route_table_id)
+        template = self.response_template(
+            REPLACE_ROUTE_TABLE_ASSOCIATION_RESPONSE)
         return template.render(association_id=new_association_id)
 
 
 CREATE_ROUTE_RESPONSE = """
-<CreateRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-07-15/">
+<CreateRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </CreateRouteResponse>
 """
 
 REPLACE_ROUTE_RESPONSE = """
-<ReplaceRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-07-15/">
+<ReplaceRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </ReplaceRouteResponse>
 """
 
 CREATE_ROUTE_TABLE_RESPONSE = """
-<CreateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-07-15/">
+<CreateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <routeTable>
       <routeTableId>{{ route_table.id }}</routeTableId>
@@ -135,7 +146,7 @@ CREATE_ROUTE_TABLE_RESPONSE = """
 """
 
 DESCRIBE_ROUTE_TABLES_RESPONSE = """
-<DescribeRouteTablesResponse xmlns="http://ec2.amazonaws.com/doc/2013-08-15/">
+<DescribeRouteTablesResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>6f570b0b-9c18-4b07-bdec-73740dcf861a</requestId>
    <routeTableSet>
      {% for route_table in route_tables %}
@@ -179,7 +190,6 @@ DESCRIBE_ROUTE_TABLES_RESPONSE = """
               </item>
             {% endfor %}
           </associationSet>
-         <tagSet/>
          <tagSet>
           {% for tag in route_table.get_tags() %}
            <item>
@@ -197,35 +207,35 @@ DESCRIBE_ROUTE_TABLES_RESPONSE = """
 """
 
 DELETE_ROUTE_RESPONSE = """
-<DeleteRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-07-15/">
+<DeleteRouteResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </DeleteRouteResponse>
 """
 
 DELETE_ROUTE_TABLE_RESPONSE = """
-<DeleteRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-07-15/">
+<DeleteRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </DeleteRouteTableResponse>
 """
 
 ASSOCIATE_ROUTE_TABLE_RESPONSE = """
-<AssociateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<AssociateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <associationId>{{ association_id }}</associationId>
 </AssociateRouteTableResponse>
 """
 
 DISASSOCIATE_ROUTE_TABLE_RESPONSE = """
-<DisassociateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<DisassociateRouteTableResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <return>true</return>
 </DisassociateRouteTableResponse>
 """
 
 REPLACE_ROUTE_TABLE_ASSOCIATION_RESPONSE = """
-<ReplaceRouteTableAssociationResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<ReplaceRouteTableAssociationResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
    <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
    <newAssociationId>{{ association_id }}</newAssociationId>
 </ReplaceRouteTableAssociationResponse>

@@ -53,6 +53,42 @@ def test_s3_server_bucket_create():
     res.data.should.equal(b"test value")
 
 
+def test_s3_server_bucket_create_from_random_host():
+    backend = server.create_backend_app("s3bucket_path")
+    test_client = backend.test_client()
+
+    res = test_client.put('/foobar', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(200)
+
+    res = test_client.get('/')
+    res.data.should.contain(b'<Name>foobar</Name>')
+
+    res = test_client.get('/foobar', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(200)
+    res.data.should.contain(b"ListBucketResult")
+
+    res = test_client.put('/foobar2/', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(200)
+
+    res = test_client.get('/')
+    res.data.should.contain(b'<Name>foobar2</Name>')
+
+    res = test_client.get('/foobar2/', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(200)
+    res.data.should.contain(b"ListBucketResult")
+
+    res = test_client.get('/missing-bucket', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(404)
+
+    res = test_client.put(
+        '/foobar/bar', 'http://1.2.3.4:5000', data='test value')
+    res.status_code.should.equal(200)
+
+    res = test_client.get('/foobar/bar', 'http://1.2.3.4:5000')
+    res.status_code.should.equal(200)
+    res.data.should.equal(b"test value")
+
+
 def test_s3_server_post_to_bucket():
     backend = server.create_backend_app("s3bucket_path")
     test_client = backend.test_client()

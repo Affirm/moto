@@ -24,6 +24,7 @@ from moto.rds2 import rds2_backends
 from moto.redshift import redshift_backends
 from moto.route53 import route53_backends
 from moto.s3 import s3_backends
+from moto.s3bucket_path import s3bucket_path_backends
 from moto.ses import ses_backends
 from moto.sns import sns_backends
 from moto.sqs import sqs_backends
@@ -52,7 +53,7 @@ BACKENDS = {
     'redshift': redshift_backends,
     'rds': rds2_backends,
     's3': s3_backends,
-    's3bucket_path': s3_backends,
+    's3bucket_path': s3bucket_path_backends,
     'ses': ses_backends,
     'sns': sns_backends,
     'sqs': sqs_backends,

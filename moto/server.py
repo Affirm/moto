@@ -12,6 +12,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.routing import BaseConverter
 from werkzeug.serving import run_simple
+from gevent.wsgi import WSGIServer
 
 from moto.backends import BACKENDS
 from moto.core.utils import convert_flask_to_httpretty_response
@@ -179,8 +180,8 @@ def main(argv=sys.argv[1:]):
         create_backend_app, service=args.service)
     main_app.debug = True
 
-    run_simple(args.host, args.port, main_app,
-               threaded=True, use_reloader=args.reload)
+    http_server = WSGIServer((args.host, args.port), main_app)
+    http_server.serve_forever()
 
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@ install_requires = [
     "werkzeug",
     "pytz",
     "python-dateutil",
+    "gevent",
 ]
 
 extras_require = {

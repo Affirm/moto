@@ -3,39 +3,45 @@ from moto.core.responses import BaseResponse
 
 
 class VPCPeeringConnections(BaseResponse):
+
     def create_vpc_peering_connection(self):
-        vpc = self.ec2_backend.get_vpc(self.querystring.get('VpcId')[0])
-        peer_vpc = self.ec2_backend.get_vpc(self.querystring.get('PeerVpcId')[0])
+        vpc = self.ec2_backend.get_vpc(self._get_param('VpcId'))
+        peer_vpc = self.ec2_backend.get_vpc(self._get_param('PeerVpcId'))
         vpc_pcx = self.ec2_backend.create_vpc_peering_connection(vpc, peer_vpc)
-        template = self.response_template(CREATE_VPC_PEERING_CONNECTION_RESPONSE)
+        template = self.response_template(
+            CREATE_VPC_PEERING_CONNECTION_RESPONSE)
         return template.render(vpc_pcx=vpc_pcx)
 
     def delete_vpc_peering_connection(self):
-        vpc_pcx_id = self.querystring.get('VpcPeeringConnectionId')[0]
+        vpc_pcx_id = self._get_param('VpcPeeringConnectionId')
         vpc_pcx = self.ec2_backend.delete_vpc_peering_connection(vpc_pcx_id)
-        template = self.response_template(DELETE_VPC_PEERING_CONNECTION_RESPONSE)
+        template = self.response_template(
+            DELETE_VPC_PEERING_CONNECTION_RESPONSE)
         return template.render(vpc_pcx=vpc_pcx)
 
     def describe_vpc_peering_connections(self):
         vpc_pcxs = self.ec2_backend.get_all_vpc_peering_connections()
-        template = self.response_template(DESCRIBE_VPC_PEERING_CONNECTIONS_RESPONSE)
+        template = self.response_template(
+            DESCRIBE_VPC_PEERING_CONNECTIONS_RESPONSE)
         return template.render(vpc_pcxs=vpc_pcxs)
 
     def accept_vpc_peering_connection(self):
-        vpc_pcx_id = self.querystring.get('VpcPeeringConnectionId')[0]
+        vpc_pcx_id = self._get_param('VpcPeeringConnectionId')
         vpc_pcx = self.ec2_backend.accept_vpc_peering_connection(vpc_pcx_id)
-        template = self.response_template(ACCEPT_VPC_PEERING_CONNECTION_RESPONSE)
+        template = self.response_template(
+            ACCEPT_VPC_PEERING_CONNECTION_RESPONSE)
         return template.render(vpc_pcx=vpc_pcx)
 
     def reject_vpc_peering_connection(self):
-        vpc_pcx_id = self.querystring.get('VpcPeeringConnectionId')[0]
+        vpc_pcx_id = self._get_param('VpcPeeringConnectionId')
         self.ec2_backend.reject_vpc_peering_connection(vpc_pcx_id)
-        template = self.response_template(REJECT_VPC_PEERING_CONNECTION_RESPONSE)
+        template = self.response_template(
+            REJECT_VPC_PEERING_CONNECTION_RESPONSE)
         return template.render()
 
 
 CREATE_VPC_PEERING_CONNECTION_RESPONSE = """
-<CreateVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<CreateVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <vpcPeeringConnection>
     <vpcPeeringConnectionId>{{ vpc_pcx.id }}</vpcPeeringConnectionId>
@@ -59,7 +65,7 @@ CREATE_VPC_PEERING_CONNECTION_RESPONSE = """
 """
 
 DESCRIBE_VPC_PEERING_CONNECTIONS_RESPONSE = """
-<DescribeVpcPeeringConnectionsResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<DescribeVpcPeeringConnectionsResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <vpcPeeringConnectionSet>
     {% for vpc_pcx in vpc_pcxs %}
@@ -71,7 +77,7 @@ DESCRIBE_VPC_PEERING_CONNECTIONS_RESPONSE = """
           <cidrBlock>{{ vpc_pcx.vpc.cidr_block }}</cidrBlock>
         </requesterVpcInfo>
         <accepterVpcInfo>
-          <ownerId>111122223333</ownerId>
+          <ownerId>123456789012</ownerId>
           <vpcId>{{ vpc_pcx.peer_vpc.id }}</vpcId>
         </accepterVpcInfo>
         <status>
@@ -87,14 +93,14 @@ DESCRIBE_VPC_PEERING_CONNECTIONS_RESPONSE = """
 """
 
 DELETE_VPC_PEERING_CONNECTION_RESPONSE = """
-<DeleteVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<DeleteVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <return>true</return>
 </DeleteVpcPeeringConnectionResponse>
 """
 
 ACCEPT_VPC_PEERING_CONNECTION_RESPONSE = """
-<AcceptVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<AcceptVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <vpcPeeringConnection>
     <vpcPeeringConnectionId>{{ vpc_pcx.id }}</vpcPeeringConnectionId>
@@ -118,7 +124,7 @@ ACCEPT_VPC_PEERING_CONNECTION_RESPONSE = """
 """
 
 REJECT_VPC_PEERING_CONNECTION_RESPONSE = """
-<RejectVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2014-06-15/">
+<RejectVpcPeeringConnectionResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>7a62c49f-347e-4fc4-9331-6e8eEXAMPLE</requestId>
   <return>true</return>
 </RejectVpcPeeringConnectionResponse>

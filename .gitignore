@@ -1,10 +1,15 @@
 moto.egg-info/*
 dist/*
+.cache
 .tox
 .coverage
+cover/
 *.pyc
 *~
 .noseids
 build/
 .idea/
 *.swp
+.DS_Store
+python_env
+.ropeproject/

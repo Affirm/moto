@@ -1,38 +1,42 @@
 from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
 from moto.ec2.utils import (
-    sequence_from_querystring,
     filters_from_querystring,
 )
 
 
 class InternetGateways(BaseResponse):
+
     def attach_internet_gateway(self):
-        igw_id = self.querystring.get("InternetGatewayId", [None])[0]
-        vpc_id = self.querystring.get("VpcId", [None])[0]
-        self.ec2_backend.attach_internet_gateway(igw_id, vpc_id)
-        template = self.response_template(ATTACH_INTERNET_GATEWAY_RESPONSE)
-        return template.render()
+        igw_id = self._get_param('InternetGatewayId')
+        vpc_id = self._get_param('VpcId')
+        if self.is_not_dryrun('AttachInternetGateway'):
+            self.ec2_backend.attach_internet_gateway(igw_id, vpc_id)
+            template = self.response_template(ATTACH_INTERNET_GATEWAY_RESPONSE)
+            return template.render()
 
     def create_internet_gateway(self):
-        igw = self.ec2_backend.create_internet_gateway()
-        template = self.response_template(CREATE_INTERNET_GATEWAY_RESPONSE)
-        return template.render(internet_gateway=igw)
+        if self.is_not_dryrun('CreateInternetGateway'):
+            igw = self.ec2_backend.create_internet_gateway()
+            template = self.response_template(CREATE_INTERNET_GATEWAY_RESPONSE)
+            return template.render(internet_gateway=igw)
 
     def delete_internet_gateway(self):
-        igw_id = self.querystring.get("InternetGatewayId", [None])[0]
-        self.ec2_backend.delete_internet_gateway(igw_id)
-        template = self.response_template(DELETE_INTERNET_GATEWAY_RESPONSE)
-        return template.render()
+        igw_id = self._get_param('InternetGatewayId')
+        if self.is_not_dryrun('DeleteInternetGateway'):
+            self.ec2_backend.delete_internet_gateway(igw_id)
+            template = self.response_template(DELETE_INTERNET_GATEWAY_RESPONSE)
+            return template.render()
 
     def describe_internet_gateways(self):
         filter_dict = filters_from_querystring(self.querystring)
         if "InternetGatewayId.1" in self.querystring:
-            igw_ids = sequence_from_querystring(
-                "InternetGatewayId", self.querystring)
-            igws = self.ec2_backend.describe_internet_gateways(igw_ids, filters=filter_dict)
+            igw_ids = self._get_multi_param("InternetGatewayId")
+            igws = self.ec2_backend.describe_internet_gateways(
+                igw_ids, filters=filter_dict)
         else:
-            igws = self.ec2_backend.describe_internet_gateways(filters=filter_dict)
+            igws = self.ec2_backend.describe_internet_gateways(
+                filters=filter_dict)
 
         template = self.response_template(DESCRIBE_INTERNET_GATEWAYS_RESPONSE)
         return template.render(internet_gateways=igws)
@@ -40,11 +44,12 @@ class InternetGateways(BaseResponse):
     def detach_internet_gateway(self):
         # TODO validate no instances with EIPs in VPC before detaching
         # raise else DependencyViolationError()
-        igw_id = self.querystring.get("InternetGatewayId", [None])[0]
-        vpc_id = self.querystring.get("VpcId", [None])[0]
-        self.ec2_backend.detach_internet_gateway(igw_id, vpc_id)
-        template = self.response_template(DETACH_INTERNET_GATEWAY_RESPONSE)
-        return template.render()
+        igw_id = self._get_param('InternetGatewayId')
+        vpc_id = self._get_param('VpcId')
+        if self.is_not_dryrun('DetachInternetGateway'):
+            self.ec2_backend.detach_internet_gateway(igw_id, vpc_id)
+            template = self.response_template(DETACH_INTERNET_GATEWAY_RESPONSE)
+            return template.render()
 
 
 ATTACH_INTERNET_GATEWAY_RESPONSE = u"""<AttachInternetGatewayResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">

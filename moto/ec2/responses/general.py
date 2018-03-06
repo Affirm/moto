@@ -1,19 +1,23 @@
 from __future__ import unicode_literals
 from moto.core.responses import BaseResponse
-from moto.ec2.utils import instance_ids_from_querystring
 
 
 class General(BaseResponse):
+
     def get_console_output(self):
-        self.instance_ids = instance_ids_from_querystring(self.querystring)
-        instance_id = self.instance_ids[0]
+        instance_id = self._get_param('InstanceId')
+        if not instance_id:
+            # For compatibility with boto.
+            # See: https://github.com/spulec/moto/pull/1152#issuecomment-332487599
+            instance_id = self._get_multi_param('InstanceId')[0]
+
         instance = self.ec2_backend.get_instance(instance_id)
         template = self.response_template(GET_CONSOLE_OUTPUT_RESULT)
         return template.render(instance=instance)
 
 
 GET_CONSOLE_OUTPUT_RESULT = '''
-<GetConsoleOutputResponse xmlns="http://ec2.amazonaws.com/doc/2012-12-01/">
+<GetConsoleOutputResponse xmlns="http://ec2.amazonaws.com/doc/2013-10-15/">
   <requestId>59dbff89-35bd-4eac-99ed-be587EXAMPLE</requestId>
   <instanceId>{{ instance.id }}</instanceId>
   <timestamp>2010-10-14T01:12:41.000Z</timestamp>

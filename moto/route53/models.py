@@ -1,13 +1,25 @@
 from __future__ import unicode_literals
 
+from collections import defaultdict
+
+import string
+import random
 import uuid
 from jinja2 import Template
 
-from moto.core import BaseBackend
-from moto.core.utils import get_random_hex
+from moto.core import BaseBackend, BaseModel
 
 
-class HealthCheck(object):
+ROUTE53_ID_CHOICE = string.ascii_uppercase + string.digits
+
+
+def create_route53_zone_id():
+    # New ID's look like this Z1RWWTK7Y8UDDQ
+    return ''.join([random.choice(ROUTE53_ID_CHOICE) for _ in range(0, 15)])
+
+
+class HealthCheck(BaseModel):
+
     def __init__(self, health_check_id, health_check_args):
         self.id = health_check_id
         self.ip_address = health_check_args.get("ip_address")
@@ -60,7 +72,8 @@ class HealthCheck(object):
         return template.render(health_check=self)
 
 
-class RecordSet(object):
+class RecordSet(BaseModel):
+
     def __init__(self, kwargs):
         self.name = kwargs.get('Name')
         self._type = kwargs.get('Type')
@@ -68,16 +81,51 @@ class RecordSet(object):
         self.records = kwargs.get('ResourceRecords', [])
         self.set_identifier = kwargs.get('SetIdentifier')
         self.weight = kwargs.get('Weight')
+        self.region = kwargs.get('Region')
         self.health_check = kwargs.get('HealthCheckId')
+        self.hosted_zone_name = kwargs.get('HostedZoneName')
+        self.hosted_zone_id = kwargs.get('HostedZoneId')
 
     @classmethod
     def create_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
         properties = cloudformation_json['Properties']
 
-        zone_name = properties["HostedZoneName"]
-        hosted_zone = route53_backend.get_hosted_zone_by_name(zone_name)
+        zone_name = properties.get("HostedZoneName")
+        if zone_name:
+            hosted_zone = route53_backend.get_hosted_zone_by_name(zone_name)
+        else:
+            hosted_zone = route53_backend.get_hosted_zone(
+                properties["HostedZoneId"])
         record_set = hosted_zone.add_rrset(properties)
         return record_set
+
+    @classmethod
+    def update_from_cloudformation_json(cls, original_resource, new_resource_name, cloudformation_json, region_name):
+        cls.delete_from_cloudformation_json(
+            original_resource.name, cloudformation_json, region_name)
+        return cls.create_from_cloudformation_json(new_resource_name, cloudformation_json, region_name)
+
+    @classmethod
+    def delete_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
+        # this will break if you changed the zone the record is in,
+        # unfortunately
+        properties = cloudformation_json['Properties']
+
+        zone_name = properties.get("HostedZoneName")
+        if zone_name:
+            hosted_zone = route53_backend.get_hosted_zone_by_name(zone_name)
+        else:
+            hosted_zone = route53_backend.get_hosted_zone(
+                properties["HostedZoneId"])
+
+        try:
+            hosted_zone.delete_rrset_by_name(resource_name)
+        except KeyError:
+            pass
+
+    @property
+    def physical_resource_id(self):
+        return self.name
 
     def to_xml(self):
         template = Template("""<ResourceRecordSet>
@@ -88,6 +136,9 @@ class RecordSet(object):
                 {% endif %}
                 {% if record_set.weight %}
                     <Weight>{{ record_set.weight }}</Weight>
+                {% endif %}
+                {% if record_set.region %}
+                    <Region>{{ record_set.region }}</Region>
                 {% endif %}
                 <TTL>{{ record_set.ttl }}</TTL>
                 <ResourceRecords>
@@ -103,13 +154,23 @@ class RecordSet(object):
             </ResourceRecordSet>""")
         return template.render(record_set=self)
 
+    def delete(self, *args, **kwargs):
+        ''' Not exposed as part of the Route 53 API - used for CloudFormation. args are ignored '''
+        hosted_zone = route53_backend.get_hosted_zone_by_name(
+            self.hosted_zone_name)
+        if not hosted_zone:
+            hosted_zone = route53_backend.get_hosted_zone(self.hosted_zone_id)
+        hosted_zone.delete_rrset_by_name(self.name)
 
-class FakeZone(object):
 
-    def __init__(self, name, id_, comment=None):
+class FakeZone(BaseModel):
+
+    def __init__(self, name, id_, private_zone, comment=None):
         self.name = name
         self.id = id_
-        self.comment = comment
+        if comment is not None:
+            self.comment = comment
+        self.private_zone = private_zone
         self.rrsets = []
 
     def add_rrset(self, record_set):
@@ -117,35 +178,51 @@ class FakeZone(object):
         self.rrsets.append(record_set)
         return record_set
 
+    def upsert_rrset(self, record_set):
+        new_rrset = RecordSet(record_set)
+        for i, rrset in enumerate(self.rrsets):
+            if rrset.name == new_rrset.name:
+                self.rrsets[i] = new_rrset
+                break
+        else:
+            self.rrsets.append(new_rrset)
+        return new_rrset
+
     def delete_rrset_by_name(self, name):
-        self.rrsets = [record_set for record_set in self.rrsets if record_set.name != name]
+        self.rrsets = [
+            record_set for record_set in self.rrsets if record_set.name != name]
 
     def delete_rrset_by_id(self, set_identifier):
-        self.rrsets = [record_set for record_set in self.rrsets if record_set.set_identifier != set_identifier]
+        self.rrsets = [
+            record_set for record_set in self.rrsets if record_set.set_identifier != set_identifier]
 
-    def get_record_sets(self, type_filter, name_filter):
+    def get_record_sets(self, start_type, start_name):
         record_sets = list(self.rrsets)  # Copy the list
-        if type_filter:
-            record_sets = [record_set for record_set in record_sets if record_set._type == type_filter]
-        if name_filter:
-            record_sets = [record_set for record_set in record_sets if record_set.name == name_filter]
+        if start_type:
+            record_sets = [
+                record_set for record_set in record_sets if record_set._type >= start_type]
+        if start_name:
+            record_sets = [
+                record_set for record_set in record_sets if record_set.name >= start_name]
 
         return record_sets
 
     @property
     def physical_resource_id(self):
-        return self.name
+        return self.id
 
     @classmethod
     def create_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
         properties = cloudformation_json['Properties']
         name = properties["Name"]
 
-        hosted_zone = route53_backend.create_hosted_zone(name)
+        hosted_zone = route53_backend.create_hosted_zone(
+            name, private_zone=False)
         return hosted_zone
 
 
-class RecordSetGroup(object):
+class RecordSetGroup(BaseModel):
+
     def __init__(self, hosted_zone_id, record_sets):
         self.hosted_zone_id = hosted_zone_id
         self.record_sets = record_sets
@@ -158,8 +235,11 @@ class RecordSetGroup(object):
     def create_from_cloudformation_json(cls, resource_name, cloudformation_json, region_name):
         properties = cloudformation_json['Properties']
 
-        zone_name = properties["HostedZoneName"]
-        hosted_zone = route53_backend.get_hosted_zone_by_name(zone_name)
+        zone_name = properties.get("HostedZoneName")
+        if zone_name:
+            hosted_zone = route53_backend.get_hosted_zone_by_name(zone_name)
+        else:
+            hosted_zone = route53_backend.get_hosted_zone(properties["HostedZoneId"])
         record_sets = properties["RecordSets"]
         for record_set in record_sets:
             hosted_zone.add_rrset(record_set)
@@ -173,18 +253,40 @@ class Route53Backend(BaseBackend):
     def __init__(self):
         self.zones = {}
         self.health_checks = {}
+        self.resource_tags = defaultdict(dict)
 
-    def create_hosted_zone(self, name, comment=None):
-        new_id = get_random_hex()
-        new_zone = FakeZone(name, new_id, comment=comment)
+    def create_hosted_zone(self, name, private_zone, comment=None):
+        new_id = create_route53_zone_id()
+        new_zone = FakeZone(
+            name, new_id, private_zone=private_zone, comment=comment)
         self.zones[new_id] = new_zone
         return new_zone
+
+    def change_tags_for_resource(self, resource_id, tags):
+        if 'Tag' in tags:
+            if isinstance(tags['Tag'], list):
+                for tag in tags['Tag']:
+                    self.resource_tags[resource_id][tag['Key']] = tag['Value']
+            else:
+                key, value = (tags['Tag']['Key'], tags['Tag']['Value'])
+                self.resource_tags[resource_id][key] = value
+        else:
+            if 'Key' in tags:
+                if isinstance(tags['Key'], list):
+                    for key in tags['Key']:
+                        del(self.resource_tags[resource_id][key])
+                else:
+                    del(self.resource_tags[resource_id][tags['Key']])
+
+    def list_tags_for_resource(self, resource_id):
+        if resource_id in self.resource_tags:
+            return self.resource_tags[resource_id]
 
     def get_all_hosted_zones(self):
         return self.zones.values()
 
     def get_hosted_zone(self, id_):
-        return self.zones.get(id_)
+        return self.zones.get(id_.replace("/hostedzone/", ""))
 
     def get_hosted_zone_by_name(self, name):
         for zone in self.get_all_hosted_zones():
@@ -192,10 +294,7 @@ class Route53Backend(BaseBackend):
                 return zone
 
     def delete_hosted_zone(self, id_):
-        zone = self.zones.get(id_)
-        if zone:
-            del self.zones[id_]
-            return zone
+        return self.zones.pop(id_.replace("/hostedzone/", ""), None)
 
     def create_health_check(self, health_check_args):
         health_check_id = str(uuid.uuid4())
@@ -208,5 +307,6 @@ class Route53Backend(BaseBackend):
 
     def delete_health_check(self, health_check_id):
         return self.health_checks.pop(health_check_id, None)
+
 
 route53_backend = Route53Backend()
